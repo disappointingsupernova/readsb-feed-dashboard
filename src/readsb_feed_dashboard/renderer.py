@@ -1,67 +1,124 @@
 """Terminal rendering module using Rich for the dashboard display."""
 
-import time
 from datetime import datetime
 
 from rich.align import Align
 from rich.columns import Columns
 from rich.console import Console, Group
-from rich.layout import Layout
-from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .collector import AircraftEntry, FeedData, compute_overlaps
-from .config import DashboardConfig
+from .collector import FeedData, compute_overlaps, get_history
+from .config import DashboardConfig, THEMES
 
 
-# Colour scheme
-COLOUR_ACTIVE = "green"
-COLOUR_INACTIVE = "red"
-COLOUR_STALE = "yellow"
-COLOUR_TITLE = "bold cyan"
-COLOUR_HEADER = "bold white"
-COLOUR_MUTED = "dim"
-COLOUR_HIGHLIGHT = "bold magenta"
+def _theme(config: DashboardConfig) -> dict:
+    """Get the active theme colours."""
+    return THEMES.get(config.theme, THEMES["dark"])
+
+
+def _rssi_style(rssi: float, theme: dict) -> str:
+    """Return colour style for an RSSI value."""
+    if rssi >= -10.0:
+        return theme["rssi_strong"]
+    elif rssi >= -20.0:
+        return theme["rssi_moderate"]
+    return theme["rssi_weak"]
+
+
+def _sparkline(values: list[int], width: int = 20) -> str:
+    """Generate a sparkline string from a list of values."""
+    if not values:
+        return ""
+    # Use Unicode block characters
+    blocks = " _.-~*"
+    # Trim to width
+    data = values[-width:]
+    if not data:
+        return ""
+    min_val = min(data)
+    max_val = max(data)
+    spread = max_val - min_val if max_val != min_val else 1
+
+    chars = []
+    spark_blocks = "\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"
+    for v in data:
+        idx = int((v - min_val) / spread * (len(spark_blocks) - 1))
+        chars.append(spark_blocks[idx])
+    return "".join(chars)
 
 
 def build_header(config: DashboardConfig) -> Panel:
     """Build the top header panel."""
+    theme = _theme(config)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    title_text = Text(config.title, style=COLOUR_TITLE, justify="center")
-    time_text = Text(now, style=COLOUR_MUTED, justify="center")
+    title_text = Text(config.title, style=theme["title"], justify="center")
+    time_text = Text(now, style=theme["muted"], justify="center")
     content = Group(title_text, time_text)
     return Panel(
         Align.center(content),
-        border_style="cyan",
+        border_style=theme["panel_border"],
         padding=(0, 1),
     )
 
 
-def build_feed_panel(feed: FeedData, overlaps: dict, feed_index: int, all_feeds: list[FeedData], ascii_mode: bool = False) -> Panel:
+def build_alerts_panel(feeds: list[FeedData], config: DashboardConfig) -> Panel | None:
+    """Build an alerts panel if any alerts are active."""
+    theme = _theme(config)
+    all_alerts = []
+    for feed in feeds:
+        all_alerts.extend(feed.alerts)
+
+    if not all_alerts:
+        return None
+
+    table = Table(show_header=True, header_style=theme["header"], box=None, padding=(0, 1))
+    table.add_column("Feed", style="bold")
+    table.add_column("Severity")
+    table.add_column("Message")
+
+    for alert in all_alerts:
+        sev_style = theme["alert"] if alert.severity == "critical" else theme["stale"]
+        table.add_row(
+            alert.feed_label,
+            Text(alert.severity.upper(), style=sev_style),
+            alert.message,
+        )
+
+    return Panel(
+        table,
+        title="ALERTS",
+        title_align="left",
+        border_style=theme["alert"],
+        padding=(0, 1),
+    )
+
+
+def build_feed_panel(feed: FeedData, overlaps: dict, feed_index: int, all_feeds: list[FeedData], config: DashboardConfig) -> Panel:
     """Build the summary panel for a single feed."""
+    theme = _theme(config)
     cfg = feed.config
 
     # Service status
     if feed.service_active == "active":
-        status_text = Text("active", style=COLOUR_ACTIVE)
+        status_text = Text("active", style=theme["active"])
     elif feed.service_active == "failed":
-        status_text = Text("failed", style=COLOUR_INACTIVE)
+        status_text = Text("failed", style=theme["inactive"])
     elif feed.service_active == "inactive":
-        status_text = Text("inactive", style=COLOUR_INACTIVE)
+        status_text = Text("inactive", style=theme["inactive"])
     else:
-        status_text = Text(feed.service_active or "unknown", style=COLOUR_STALE)
+        status_text = Text(feed.service_active or "unknown", style=theme["stale"])
 
     # JSON status
     if not feed.json_exists:
-        json_status = Text("NOT FOUND", style=COLOUR_INACTIVE)
+        json_status = Text("NOT FOUND", style=theme["inactive"])
     elif feed.json_stale:
-        json_status = Text("STALE", style=COLOUR_STALE)
+        json_status = Text("STALE", style=theme["stale"])
     elif feed.json_error:
-        json_status = Text(f"ERROR: {feed.json_error}", style=COLOUR_INACTIVE)
+        json_status = Text(f"ERROR: {feed.json_error}", style=theme["inactive"])
     else:
-        json_status = Text("LIVE", style=COLOUR_ACTIVE)
+        json_status = Text("LIVE", style=theme["active"])
 
     # Build info table
     info = Table(show_header=False, show_edge=False, box=None, padding=(0, 1))
@@ -69,8 +126,17 @@ def build_feed_panel(feed: FeedData, overlaps: dict, feed_index: int, all_feeds:
     info.add_column("Value")
 
     info.add_row("Aircraft:", str(feed.aircraft_count))
+    info.add_row("With position:", str(feed.position_tracked))
     info.add_row("Service:", status_text)
+
+    if feed.service_uptime:
+        info.add_row("Uptime:", feed.service_uptime)
+
     info.add_row("JSON:", json_status)
+
+    # Message rate
+    if feed.messages_rate is not None:
+        info.add_row("Msgs/sec:", f"{feed.messages_rate:.1f}")
 
     # Unique count
     unique_count = overlaps.get("unique_to", {}).get(feed_index, 0)
@@ -82,6 +148,37 @@ def build_feed_panel(feed: FeedData, overlaps: dict, feed_index: int, all_feeds:
         if count > 0:
             other_label = all_feeds[j].config.label
             info.add_row(f"Shared w/{other_label}:", str(count))
+
+    # RSSI stats
+    if feed.rssi_stats.avg_rssi is not None:
+        rssi_text = Text(
+            f"{feed.rssi_stats.min_rssi:.1f} / {feed.rssi_stats.avg_rssi:.1f} / {feed.rssi_stats.max_rssi:.1f}",
+            style=_rssi_style(feed.rssi_stats.avg_rssi, theme),
+        )
+        info.add_row("RSSI min/avg/max:", rssi_text)
+
+    # Type breakdown
+    tb = feed.type_breakdown
+    type_parts = []
+    if tb.adsb_icao:
+        type_parts.append(f"ADS-B:{tb.adsb_icao}")
+    if tb.mlat:
+        type_parts.append(f"MLAT:{tb.mlat}")
+    if tb.tisb:
+        type_parts.append(f"TIS-B:{tb.tisb}")
+    if tb.mode_s:
+        type_parts.append(f"Mode-S:{tb.mode_s}")
+    if tb.other:
+        type_parts.append(f"Other:{tb.other}")
+    if type_parts:
+        info.add_row("Types:", " ".join(type_parts))
+
+    # Distance rings
+    dr = feed.distance_rings
+    has_distance = dr.within_50nm + dr.within_100nm + dr.within_150nm + dr.within_200nm + dr.beyond_200nm
+    if has_distance:
+        rings_str = f"<50:{dr.within_50nm} <100:{dr.within_100nm} <150:{dr.within_150nm} <200:{dr.within_200nm} 200+:{dr.beyond_200nm}"
+        info.add_row("Dist rings:", rings_str)
 
     # Ports
     if cfg.beast_port:
@@ -96,13 +193,31 @@ def build_feed_panel(feed: FeedData, overlaps: dict, feed_index: int, all_feeds:
     if cfg.serial:
         info.add_row("Serial:", cfg.serial)
 
+    # Process stats
+    if feed.process_stats.memory_mb is not None:
+        info.add_row("Memory:", f"{feed.process_stats.memory_mb:.1f} MB")
+    if feed.process_stats.cpu_percent is not None:
+        info.add_row("CPU:", f"{feed.process_stats.cpu_percent:.1f}%")
+
+    # Network stats
+    if feed.network_stats.bytes_rx is not None:
+        rx_str = _format_bytes_rate(feed.network_stats.bytes_rx)
+        tx_str = _format_bytes_rate(feed.network_stats.bytes_tx)
+        info.add_row("Net I/O:", f"rx:{rx_str} tx:{tx_str}")
+
+    # Sparkline
+    history = get_history()
+    spark_data = history.get_sparkline_data(cfg.label)
+    if len(spark_data) > 2:
+        spark_str = _sparkline(spark_data, width=20)
+        info.add_row("Trend:", Text(spark_str, style=theme["sparkline"]))
+
     # Title
     title = f"{cfg.label}"
     if cfg.serial:
         title += f" [{cfg.serial}]"
 
-    border_style = COLOUR_ACTIVE if feed.service_active == "active" else COLOUR_INACTIVE
-    box_type = None  # Rich handles ascii/unicode via Console
+    border_style = theme["feed_panel_ok"] if feed.service_active == "active" else theme["feed_panel_bad"]
 
     return Panel(
         info,
@@ -113,11 +228,13 @@ def build_feed_panel(feed: FeedData, overlaps: dict, feed_index: int, all_feeds:
     )
 
 
-def build_aircraft_table(feed: FeedData, max_rows: int = 10) -> Panel:
+def build_aircraft_table(feed: FeedData, config: DashboardConfig) -> Panel:
     """Build an aircraft table for a feed."""
+    theme = _theme(config)
+
     table = Table(
         show_header=True,
-        header_style=COLOUR_HEADER,
+        header_style=theme["header"],
         expand=True,
         padding=(0, 1),
     )
@@ -130,109 +247,161 @@ def build_aircraft_table(feed: FeedData, max_rows: int = 10) -> Panel:
     table.add_column("Squawk", min_width=6)
     table.add_column("Dist (nm)", justify="right", min_width=8)
     table.add_column("Seen (s)", justify="right", min_width=7)
+    table.add_column("Type", min_width=6)
 
-    # Sort by 'seen' (most recently seen first)
-    sorted_aircraft = sorted(
-        feed.aircraft,
-        key=lambda a: a.seen if a.seen is not None else 9999,
-    )
+    # Sort aircraft by configured sort key
+    sorted_aircraft = _sort_aircraft(feed.aircraft, config.sort_by)
 
-    for ac in sorted_aircraft[:max_rows]:
+    for ac in sorted_aircraft[:config.max_aircraft_rows]:
+        # Colour-coded RSSI
+        if ac.rssi is not None:
+            rssi_text = Text(f"{ac.rssi:.1f}", style=_rssi_style(ac.rssi, theme))
+        else:
+            rssi_text = Text("-")
+
         table.add_row(
             ac.hex,
             ac.flight or "-",
             str(ac.alt_baro) if ac.alt_baro is not None else "-",
             f"{ac.gs:.0f}" if ac.gs is not None else "-",
-            f"{ac.rssi:.1f}" if ac.rssi is not None else "-",
+            rssi_text,
             ac.squawk or "-",
             f"{ac.distance:.1f}" if ac.distance is not None else "-",
             f"{ac.seen:.0f}" if ac.seen is not None else "-",
+            ac.ac_type or "-",
         )
 
     if not feed.aircraft:
-        table.add_row("-", "-", "-", "-", "-", "-", "-", "-")
+        table.add_row("-", "-", "-", "-", Text("-"), "-", "-", "-", "-")
 
     return Panel(
         table,
-        title=f"Latest Aircraft — {feed.config.label}",
+        title=f"Latest Aircraft -- {feed.config.label}",
         title_align="left",
-        border_style="blue",
+        border_style=theme["table_border"],
     )
 
 
-def build_summary_panel(feeds: list[FeedData], overlaps: dict) -> Panel:
+def build_summary_panel(feeds: list[FeedData], overlaps: dict, config: DashboardConfig) -> Panel:
     """Build a global summary panel."""
-    table = Table(show_header=True, header_style=COLOUR_HEADER, box=None, padding=(0, 1))
+    theme = _theme(config)
+
+    table = Table(show_header=True, header_style=theme["header"], box=None, padding=(0, 1))
     table.add_column("Feed", style="bold cyan")
     table.add_column("Aircraft", justify="right")
+    table.add_column("Tracked", justify="right")
     table.add_column("Unique", justify="right")
-    table.add_column("Service", justify="centre")
-    table.add_column("JSON", justify="centre")
+    table.add_column("Msgs/s", justify="right")
+    table.add_column("Service")
+    table.add_column("JSON")
 
     for i, feed in enumerate(feeds):
         # Service
         if feed.service_active == "active":
-            svc_text = Text("active", style=COLOUR_ACTIVE)
+            svc_text = Text("active", style=theme["active"])
         else:
-            svc_text = Text(feed.service_active or "?", style=COLOUR_INACTIVE)
+            svc_text = Text(feed.service_active or "?", style=theme["inactive"])
 
         # JSON
         if not feed.json_exists:
-            j_text = Text("MISSING", style=COLOUR_INACTIVE)
+            j_text = Text("MISSING", style=theme["inactive"])
         elif feed.json_stale:
-            j_text = Text("STALE", style=COLOUR_STALE)
+            j_text = Text("STALE", style=theme["stale"])
         elif feed.json_error:
-            j_text = Text("ERROR", style=COLOUR_INACTIVE)
+            j_text = Text("ERROR", style=theme["inactive"])
         else:
-            j_text = Text("LIVE", style=COLOUR_ACTIVE)
+            j_text = Text("LIVE", style=theme["active"])
 
         unique = overlaps.get("unique_to", {}).get(i, 0)
+        rate_str = f"{feed.messages_rate:.0f}" if feed.messages_rate is not None else "-"
+
         table.add_row(
             feed.config.label,
             str(feed.aircraft_count),
+            str(feed.position_tracked),
             str(unique),
+            rate_str,
             svc_text,
             j_text,
         )
 
     total_unique = overlaps.get("total_unique", 0)
-    table.add_row("", "", "", "", "")
+    table.add_row("", "", "", "", "", "", "")
     table.add_row(
         Text("TOTAL UNIQUE", style="bold"),
         Text(str(total_unique), style="bold"),
-        "", "", "",
+        "", "", "", "", "",
     )
 
-    return Panel(table, title="Summary", title_align="left", border_style="magenta")
+    return Panel(table, title="Summary", title_align="left", border_style=theme["summary_border"])
 
 
-def render_dashboard(console: Console, config: DashboardConfig, feeds: list[FeedData]) -> Group:
-    """Render the full dashboard as a Rich renderable."""
+def render_dashboard(console: Console, config: DashboardConfig, feeds: list[FeedData], focused_feed: int | None = None) -> Group:
+    """Render the full dashboard as a Rich renderable.
+
+    Args:
+        focused_feed: If set, show only this feed's panel and table in full detail.
+    """
     overlaps = compute_overlaps(feeds)
-
     renderables = []
 
     # Header
     renderables.append(build_header(config))
 
-    # Summary
-    renderables.append(build_summary_panel(feeds, overlaps))
+    # Alerts
+    alerts_panel = build_alerts_panel(feeds, config)
+    if alerts_panel:
+        renderables.append(alerts_panel)
 
-    # Feed panels side-by-side where possible
+    # If focused on a single feed
+    if focused_feed is not None and 0 <= focused_feed < len(feeds):
+        feed = feeds[focused_feed]
+        renderables.append(build_feed_panel(feed, overlaps, focused_feed, feeds, config))
+        if not config.compact_mode:
+            renderables.append(build_aircraft_table(feed, config))
+        return Group(*renderables)
+
+    # Summary
+    renderables.append(build_summary_panel(feeds, overlaps, config))
+
+    # Feed panels side-by-side
     feed_panels = []
     for i, feed in enumerate(feeds):
-        feed_panels.append(build_feed_panel(feed, overlaps, i, feeds, ascii_mode=not config.unicode_mode))
+        feed_panels.append(build_feed_panel(feed, overlaps, i, feeds, config))
 
     if len(feed_panels) <= 3:
         renderables.append(Columns(feed_panels, equal=True, expand=True))
     else:
-        # Group in rows of 3
         for chunk_start in range(0, len(feed_panels), 3):
             chunk = feed_panels[chunk_start:chunk_start + 3]
             renderables.append(Columns(chunk, equal=True, expand=True))
 
-    # Aircraft tables
-    for feed in feeds:
-        renderables.append(build_aircraft_table(feed, max_rows=config.max_aircraft_rows))
+    # Aircraft tables (unless compact mode)
+    if not config.compact_mode:
+        for feed in feeds:
+            renderables.append(build_aircraft_table(feed, config))
 
     return Group(*renderables)
+
+
+def _sort_aircraft(aircraft: list, sort_by: str) -> list:
+    """Sort aircraft list by the given key."""
+    if sort_by == "distance":
+        return sorted(aircraft, key=lambda a: a.distance if a.distance is not None else 9999)
+    elif sort_by == "altitude":
+        return sorted(aircraft, key=lambda a: -(a.alt_baro if a.alt_baro is not None else -9999))
+    elif sort_by == "rssi":
+        return sorted(aircraft, key=lambda a: -(a.rssi if a.rssi is not None else -999))
+    else:  # "seen" (default)
+        return sorted(aircraft, key=lambda a: a.seen if a.seen is not None else 9999)
+
+
+def _format_bytes_rate(bytes_per_sec: int | None) -> str:
+    """Format bytes/sec to a human-readable string."""
+    if bytes_per_sec is None:
+        return "-"
+    if bytes_per_sec < 1024:
+        return f"{bytes_per_sec} B/s"
+    elif bytes_per_sec < 1024 * 1024:
+        return f"{bytes_per_sec / 1024:.1f} KB/s"
+    return f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
