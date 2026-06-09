@@ -674,8 +674,12 @@ def _check_alerts(data: FeedData) -> None:
 def compute_overlaps(feeds: list[FeedData]) -> dict:
     """Compute aircraft overlap statistics between feeds.
 
+    For 'unique_to', we compare SDR feeds against other SDR feeds only
+    (excluding merge feeds from the comparison). This way 'unique' means
+    'seen by this SDR but not by any other SDR'.
+
     Returns a dict with:
-      - unique_to[i]: count of aircraft only seen by feed i
+      - unique_to[i]: count of aircraft only seen by this SDR (not other SDRs)
       - shared[i][j]: count of aircraft seen by both feed i and j
       - total_unique: total unique hex codes across all feeds
     """
@@ -690,13 +694,25 @@ def compute_overlaps(feeds: list[FeedData]) -> dict:
         all_hex.update(feed.hex_set)
     result["total_unique"] = len(all_hex)
 
-    for i, feed_i in enumerate(feeds):
-        others = set()
-        for j, feed_j in enumerate(feeds):
-            if i != j:
-                others.update(feed_j.hex_set)
-        result["unique_to"][i] = len(feed_i.hex_set - others)
+    # Identify SDR-only feeds for unique calculation
+    sdr_indices = [i for i, f in enumerate(feeds) if f.config.feed_type != "merge"]
 
+    for i, feed_i in enumerate(feeds):
+        if feed_i.config.feed_type == "merge":
+            # For merge feeds, unique = aircraft not in any SDR (should be 0 normally)
+            sdr_hex = set()
+            for j in sdr_indices:
+                sdr_hex.update(feeds[j].hex_set)
+            result["unique_to"][i] = len(feed_i.hex_set - sdr_hex)
+        else:
+            # For SDR feeds, unique = aircraft not seen by any other SDR
+            other_sdr_hex = set()
+            for j in sdr_indices:
+                if j != i:
+                    other_sdr_hex.update(feeds[j].hex_set)
+            result["unique_to"][i] = len(feed_i.hex_set - other_sdr_hex)
+
+    # Shared is pairwise between all feeds
     for i in range(len(feeds)):
         result["shared"][i] = {}
         for j in range(len(feeds)):
