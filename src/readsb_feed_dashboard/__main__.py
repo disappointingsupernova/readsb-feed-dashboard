@@ -286,10 +286,29 @@ def handle_watchdog(config: DashboardConfig) -> None:
     sys.exit(0)
 
 
+MAX_LOG_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB
+
+
 def log_cycle(feeds: list, log_path: str) -> None:
-    """Append current feed data to a CSV log file."""
+    """Append current feed data to a CSV log file with size limit."""
     now = datetime.now().isoformat()
-    file_exists = Path(log_path).exists()
+    log_file = Path(log_path)
+
+    # Enforce maximum log file size to prevent disk exhaustion
+    if log_file.exists():
+        try:
+            if log_file.stat().st_size >= MAX_LOG_SIZE_BYTES:
+                # Rotate: rename current to .old, start fresh
+                old_path = log_file.with_suffix(".csv.old")
+                try:
+                    old_path.unlink(missing_ok=True)
+                    log_file.rename(old_path)
+                except OSError:
+                    return  # Cannot rotate, skip logging
+        except OSError:
+            return
+
+    file_exists = log_file.exists()
 
     try:
         with open(log_path, "a", newline="") as f:
