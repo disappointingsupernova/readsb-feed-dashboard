@@ -295,7 +295,21 @@ def _read_local_json(data: FeedData, stale_threshold: float) -> Optional[dict]:
     """Read a local aircraft.json file."""
     json_path = Path(data.config.json_path)
 
-    if not json_path.exists():
+    # Path traversal protection: resolve symlinks and verify safe prefix
+    try:
+        resolved = json_path.resolve()
+    except (OSError, RuntimeError):
+        data.json_exists = False
+        data.json_error = "Cannot resolve path"
+        return None
+
+    allowed_prefixes = ("/run/", "/tmp/", "/var/")
+    if not any(str(resolved).startswith(p) for p in allowed_prefixes):
+        data.json_exists = False
+        data.json_error = f"Path outside allowed directories: {resolved}"
+        return None
+
+    if not resolved.exists():
         data.json_exists = False
         data.json_error = "File not found"
         return None
@@ -303,7 +317,7 @@ def _read_local_json(data: FeedData, stale_threshold: float) -> Optional[dict]:
     data.json_exists = True
 
     try:
-        stat = json_path.stat()
+        stat = resolved.stat()
         data.json_mtime = stat.st_mtime
         age = time.time() - stat.st_mtime
         data.json_stale = age > stale_threshold
@@ -312,7 +326,7 @@ def _read_local_json(data: FeedData, stale_threshold: float) -> Optional[dict]:
         return None
 
     try:
-        with open(json_path, "r") as f:
+        with open(resolved, "r") as f:
             return json.load(f)
     except json.JSONDecodeError as e:
         data.json_error = f"Malformed JSON: {e}"
