@@ -99,6 +99,7 @@ class FeedData:
     config: FeedConfig
     aircraft: list[AircraftEntry] = field(default_factory=list)
     aircraft_count: int = 0
+    aircraft_count_delta: Optional[int] = None
     position_tracked: int = 0
     hex_set: set[str] = field(default_factory=set)
     json_exists: bool = False
@@ -109,13 +110,16 @@ class FeedData:
     service_uptime: Optional[str] = None
     listening_ports: list[str] = field(default_factory=list)
     messages_total: Optional[int] = None
-    messages_rate: Optional[float] = None  # msgs/sec
+    messages_rate: Optional[float] = None
     rssi_stats: RSSIStats = field(default_factory=RSSIStats)
     distance_rings: DistanceRings = field(default_factory=DistanceRings)
     type_breakdown: TypeBreakdown = field(default_factory=TypeBreakdown)
     process_stats: ProcessStats = field(default_factory=ProcessStats)
     network_stats: NetworkStats = field(default_factory=NetworkStats)
     alerts: list[Alert] = field(default_factory=list)
+    farthest_aircraft: Optional[AircraftEntry] = None
+    max_range_session: Optional[float] = None
+    recently_lost: list[str] = field(default_factory=list)
 
 
 class FeedHistory:
@@ -126,6 +130,9 @@ class FeedHistory:
         self._aircraft_counts: dict[str, deque] = {}
         self._message_counts: dict[str, tuple[Optional[int], Optional[float]]] = {}
         self._network_prev: dict[str, tuple[Optional[int], Optional[int], float]] = {}
+        self._max_range: dict[str, float] = {}
+        self._prev_hex_sets: dict[str, set[str]] = {}
+        self._prev_aircraft_counts: dict[str, int] = {}
 
     def update_aircraft_count(self, feed_label: str, count: int) -> None:
         """Record aircraft count for sparkline."""
@@ -160,6 +167,32 @@ class FeedHistory:
             return None
 
         return delta / dt
+
+    def update_max_range(self, feed_label: str, distance: float) -> float:
+        """Update and return the max range seen this session."""
+        current = self._max_range.get(feed_label, 0.0)
+        if distance > current:
+            self._max_range[feed_label] = distance
+            return distance
+        return current
+
+    def get_max_range(self, feed_label: str) -> Optional[float]:
+        """Get the session max range for a feed."""
+        return self._max_range.get(feed_label)
+
+    def compute_count_delta(self, feed_label: str, count: int) -> Optional[int]:
+        """Compute aircraft count change since last cycle."""
+        prev = self._prev_aircraft_counts.get(feed_label)
+        self._prev_aircraft_counts[feed_label] = count
+        if prev is None:
+            return None
+        return count - prev
+
+    def compute_recently_lost(self, feed_label: str, current_hex: set[str]) -> list[str]:
+        """Return hex codes that were in the previous cycle but not this one."""
+        prev = self._prev_hex_sets.get(feed_label, set())
+        self._prev_hex_sets[feed_label] = current_hex.copy()
+        return sorted(prev - current_hex)[:10]  # Cap at 10
 
     def update_network(self, feed_label: str, rx: Optional[int], tx: Optional[int]) -> tuple[Optional[int], Optional[int]]:
         """Compute network bytes/sec delta."""
@@ -219,6 +252,19 @@ def collect_feed_data(feed_config: FeedConfig, config: DashboardConfig) -> FeedD
 
     # Sparkline
     _history.update_aircraft_count(feed_config.label, data.aircraft_count)
+
+    # Aircraft count delta
+    data.aircraft_count_delta = _history.compute_count_delta(
+        feed_config.label, data.aircraft_count
+    )
+
+    # Recently lost aircraft
+    data.recently_lost = _history.compute_recently_lost(
+        feed_config.label, data.hex_set
+    )
+
+    # Farthest aircraft and max range
+    _compute_farthest(data)
 
     # Alerts
     _check_alerts(data)
@@ -709,6 +755,81 @@ def _check_network_stats(data: FeedData) -> None:
         data.network_stats = NetworkStats(bytes_rx=rx_rate, bytes_tx=tx_rate)
     except (OSError, ValueError, IndexError):
         pass
+
+
+def _compute_farthest(data: FeedData) -> None:
+    """Find the farthest aircraft and update session max range."""
+    farthest = None
+    max_dist = 0.0
+    for ac in data.aircraft:
+        if ac.distance is not None and ac.distance > max_dist:
+            max_dist = ac.distance
+            farthest = ac
+
+    data.farthest_aircraft = farthest
+    if max_dist > 0:
+        data.max_range_session = _history.update_max_range(data.config.label, max_dist)
+    else:
+        data.max_range_session = _history.get_max_range(data.config.label)
+
+
+@dataclass
+class SystemInfo:
+    """Host system information."""
+
+    hostname: Optional[str] = None
+    uptime: Optional[str] = None
+    cpu_temp: Optional[float] = None
+    disk_free_run: Optional[str] = None
+    kernel: Optional[str] = None
+
+
+def collect_system_info() -> SystemInfo:
+    """Collect host system information."""
+    info = SystemInfo()
+
+    # Hostname
+    try:
+        info.hostname = Path("/etc/hostname").read_text().strip()
+    except OSError:
+        pass
+
+    # Uptime
+    try:
+        with open("/proc/uptime", "r") as f:
+            secs = float(f.read().split()[0])
+        info.uptime = _format_duration(secs)
+    except (OSError, ValueError):
+        pass
+
+    # CPU temperature (Raspberry Pi)
+    try:
+        temp_path = Path("/sys/class/thermal/thermal_zone0/temp")
+        if temp_path.exists():
+            millideg = int(temp_path.read_text().strip())
+            info.cpu_temp = millideg / 1000.0
+    except (OSError, ValueError):
+        pass
+
+    # Disk free on /run
+    try:
+        result = subprocess.run(
+            ["df", "-h", "--output=avail", "/run"],
+            capture_output=True, text=True, timeout=5
+        )
+        lines = result.stdout.strip().splitlines()
+        if len(lines) >= 2:
+            info.disk_free_run = lines[1].strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    # Kernel
+    try:
+        info.kernel = Path("/proc/version").read_text().split()[2]
+    except (OSError, IndexError):
+        pass
+
+    return info
 
 
 def _check_alerts(data: FeedData) -> None:
