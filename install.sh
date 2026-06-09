@@ -84,8 +84,16 @@ install_app() {
             cp -r "$(pwd)" "$INSTALL_DIR"
         else
             info "Cloning repository..."
-            git clone "$REPO_URL" "$INSTALL_DIR" || error "Failed to clone repository."
+            git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" || error "Failed to clone repository."
         fi
+    fi
+
+    # Verify we have expected project structure (basic integrity check)
+    if [[ ! -f "${INSTALL_DIR}/pyproject.toml" ]]; then
+        error "Integrity check failed: pyproject.toml not found in ${INSTALL_DIR}"
+    fi
+    if [[ ! -d "${INSTALL_DIR}/src/readsb_feed_dashboard" ]]; then
+        error "Integrity check failed: src/readsb_feed_dashboard not found"
     fi
 
     # Create or update virtual environment
