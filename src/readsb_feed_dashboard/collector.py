@@ -371,11 +371,56 @@ def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R_NM * c
 
 
+def _validate_url(url: str) -> Optional[str]:
+    """Validate a remote feed URL. Returns error string or None if valid."""
+    from urllib.parse import urlparse
+    import ipaddress
+
+    parsed = urlparse(url)
+
+    # Scheme must be http or https only
+    if parsed.scheme not in ("http", "https"):
+        return f"Unsupported URL scheme: {parsed.scheme} (only http/https allowed)"
+
+    # Reject obviously dangerous hosts
+    hostname = parsed.hostname or ""
+    if not hostname:
+        return "URL has no hostname"
+
+    # Block metadata endpoints and loopback
+    blocked_hosts = {"169.254.169.254", "metadata.google.internal"}
+    if hostname in blocked_hosts:
+        return f"Blocked host: {hostname}"
+
+    # Check if hostname is an IP and block link-local/loopback
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if addr.is_loopback or addr.is_link_local:
+            return f"Blocked address: {hostname} (loopback/link-local)"
+    except ValueError:
+        # Not an IP literal — that's fine, it's a hostname
+        pass
+
+    return None
+
+
 def _fetch_remote_json(data: FeedData) -> Optional[dict]:
     """Fetch aircraft.json from a remote HTTP endpoint."""
+    import ssl
+
+    url = data.config.json_url
+
+    # Validate URL before fetching
+    url_error = _validate_url(url)
+    if url_error:
+        data.json_exists = False
+        data.json_error = url_error
+        return None
+
     try:
-        req = urllib.request.Request(data.config.json_url, headers={"User-Agent": "readsb-feed-dashboard"})
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        ctx = ssl.create_default_context()
+        req = urllib.request.Request(url, headers={"User-Agent": "readsb-feed-dashboard"})
+        with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
             raw = json.loads(resp.read())
         data.json_exists = True
         data.json_stale = False
