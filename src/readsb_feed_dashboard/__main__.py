@@ -1,17 +1,21 @@
 """Main entry point for readsb-feed-dashboard."""
 
 import argparse
+import csv
+import json
 import os
 import signal
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from rich.console import Console
 
 from . import __version__
-from .collector import collect_feed_data, compute_overlaps
+from .collector import collect_feed_data, compute_overlaps, get_history, init_history
 from .config import DashboardConfig
 from .renderer import render_dashboard
 
@@ -61,6 +65,45 @@ def parse_args() -> argparse.Namespace:
         help="Maximum aircraft rows per feed table (default: 10).",
     )
     parser.add_argument(
+        "--sort",
+        type=str,
+        choices=["seen", "distance", "altitude", "rssi"],
+        default=None,
+        help="Sort aircraft table by: seen, distance, altitude, rssi (default: seen).",
+    )
+    parser.add_argument(
+        "--compact",
+        action="store_true",
+        default=False,
+        help="Compact mode — hide aircraft tables, show only summary and feed panels.",
+    )
+    parser.add_argument(
+        "--theme",
+        type=str,
+        choices=["dark", "light", "solarised"],
+        default=None,
+        help="Colour theme (default: dark).",
+    )
+    parser.add_argument(
+        "--log",
+        type=str,
+        default=None,
+        help="Log aircraft counts to a CSV file each refresh cycle.",
+    )
+    parser.add_argument(
+        "--export",
+        type=str,
+        choices=["json"],
+        default=None,
+        help="Export current state as JSON and exit.",
+    )
+    parser.add_argument(
+        "--watchdog",
+        action="store_true",
+        default=False,
+        help="Exit with non-zero status if any feed is down (for scripts/cron).",
+    )
+    parser.add_argument(
         "--update",
         action="store_true",
         default=False,
@@ -86,8 +129,6 @@ def handle_update() -> None:
     """Handle the --update flag."""
     print("Updating readsb-feed-dashboard...")
 
-    repo_url = "https://github.com/Louis/readsb-feed-dashboard.git"
-
     if INSTALL_DIR.exists():
         try:
             subprocess.run(
@@ -103,7 +144,6 @@ def handle_update() -> None:
         print("Please re-run the install script.")
         sys.exit(1)
 
-    # Re-install dependencies
     try:
         subprocess.run(
             [sys.executable, "-m", "pip", "install", "--upgrade", str(INSTALL_DIR)],
@@ -120,8 +160,6 @@ def handle_update() -> None:
 
 def dump_config(config: DashboardConfig) -> None:
     """Dump configuration as JSON."""
-    import json
-
     data = {
         "title": config.title,
         "refresh_interval": config.refresh_interval,
@@ -129,21 +167,134 @@ def dump_config(config: DashboardConfig) -> None:
         "max_aircraft_rows": config.max_aircraft_rows,
         "show_ports": config.show_ports,
         "show_service_status": config.show_service_status,
+        "theme": config.theme,
+        "sort_by": config.sort_by,
+        "stale_threshold": config.stale_threshold,
+        "sparkline_length": config.sparkline_length,
+        "compact_mode": config.compact_mode,
+        "log_path": config.log_path,
         "feeds": [],
     }
     for feed in config.feeds:
-        data["feeds"].append({
+        feed_data = {
             "label": feed.label,
             "json_path": feed.json_path,
+            "json_url": feed.json_url,
             "service_name": feed.service_name,
             "feed_type": feed.feed_type,
             "beast_port": feed.beast_port,
             "sbs_port": feed.sbs_port,
             "serial": feed.serial,
-        })
+        }
+        if feed.alerts:
+            feed_data["alerts"] = {
+                "min_aircraft": feed.alerts.min_aircraft,
+                "alert_on_service_inactive": feed.alerts.alert_on_service_inactive,
+                "alert_on_stale_json": feed.alerts.alert_on_stale_json,
+            }
+        data["feeds"].append(feed_data)
 
     print(json.dumps(data, indent=2))
     sys.exit(0)
+
+
+def handle_export(config: DashboardConfig) -> None:
+    """Export current state as structured JSON."""
+    feeds = [collect_feed_data(f, config) for f in config.feeds]
+    overlaps = compute_overlaps(feeds)
+
+    output = {
+        "timestamp": datetime.now().isoformat(),
+        "total_unique": overlaps["total_unique"],
+        "feeds": [],
+    }
+
+    for i, feed in enumerate(feeds):
+        feed_out = {
+            "label": feed.config.label,
+            "aircraft_count": feed.aircraft_count,
+            "position_tracked": feed.position_tracked,
+            "unique": overlaps["unique_to"].get(i, 0),
+            "service_active": feed.service_active,
+            "service_uptime": feed.service_uptime,
+            "json_exists": feed.json_exists,
+            "json_stale": feed.json_stale,
+            "json_error": feed.json_error,
+            "messages_rate": feed.messages_rate,
+            "rssi_stats": {
+                "min": feed.rssi_stats.min_rssi,
+                "avg": feed.rssi_stats.avg_rssi,
+                "max": feed.rssi_stats.max_rssi,
+            },
+            "distance_rings": {
+                "within_50nm": feed.distance_rings.within_50nm,
+                "within_100nm": feed.distance_rings.within_100nm,
+                "within_150nm": feed.distance_rings.within_150nm,
+                "within_200nm": feed.distance_rings.within_200nm,
+                "beyond_200nm": feed.distance_rings.beyond_200nm,
+            },
+            "type_breakdown": {
+                "adsb_icao": feed.type_breakdown.adsb_icao,
+                "mlat": feed.type_breakdown.mlat,
+                "tisb": feed.type_breakdown.tisb,
+                "mode_s": feed.type_breakdown.mode_s,
+                "other": feed.type_breakdown.other,
+            },
+            "alerts": [{"message": a.message, "severity": a.severity} for a in feed.alerts],
+        }
+        output["feeds"].append(feed_out)
+
+    print(json.dumps(output, indent=2))
+    sys.exit(0)
+
+
+def handle_watchdog(config: DashboardConfig) -> None:
+    """Check feed health and exit with appropriate code."""
+    feeds = [collect_feed_data(f, config) for f in config.feeds]
+
+    failures = []
+    for feed in feeds:
+        if feed.service_active in ("inactive", "failed"):
+            failures.append(f"{feed.config.label}: service {feed.service_active}")
+        elif not feed.json_exists:
+            failures.append(f"{feed.config.label}: JSON not found")
+        elif feed.json_stale:
+            failures.append(f"{feed.config.label}: JSON stale")
+
+    if failures:
+        for f in failures:
+            print(f"FAIL: {f}", file=sys.stderr)
+        sys.exit(1)
+
+    print("OK: All feeds healthy.")
+    sys.exit(0)
+
+
+def log_cycle(feeds: list, log_path: str) -> None:
+    """Append current feed data to a CSV log file."""
+    now = datetime.now().isoformat()
+    file_exists = Path(log_path).exists()
+
+    try:
+        with open(log_path, "a", newline="") as f:
+            writer = csv.writer(f)
+            if not file_exists:
+                writer.writerow([
+                    "timestamp", "feed", "aircraft", "position_tracked",
+                    "messages_rate", "service_active", "json_stale",
+                ])
+            for feed in feeds:
+                writer.writerow([
+                    now,
+                    feed.config.label,
+                    feed.aircraft_count,
+                    feed.position_tracked,
+                    f"{feed.messages_rate:.1f}" if feed.messages_rate is not None else "",
+                    feed.service_active,
+                    feed.json_stale,
+                ])
+    except OSError:
+        pass  # Non-critical — do not crash for logging failures
 
 
 def main() -> None:
@@ -172,9 +323,23 @@ def main() -> None:
         config.unicode_mode = True
     if args.max_rows is not None:
         config.max_aircraft_rows = args.max_rows
+    if args.sort:
+        config.sort_by = args.sort
+    if args.compact:
+        config.compact_mode = True
+    if args.theme:
+        config.theme = args.theme
+    if args.log:
+        config.log_path = args.log
 
     if args.dump_config:
         dump_config(config)
+
+    if args.export:
+        handle_export(config)
+
+    if args.watchdog:
+        handle_watchdog(config)
 
     if not config.feeds:
         print("No feeds detected or configured.", file=sys.stderr)
@@ -187,34 +352,103 @@ def main() -> None:
         print("Run with --dump-config to see what was auto-detected.", file=sys.stderr)
         sys.exit(1)
 
+    # Initialise history with configured sparkline length
+    init_history(config.sparkline_length)
+
     # Set up console
-    console = Console(force_terminal=True)
     if not config.unicode_mode:
-        console = Console(force_terminal=True, legacy_windows=True)
+        os.environ["TERM"] = "dumb"
+    console = Console(force_terminal=True)
 
     # Handle signals gracefully
     def signal_handler(sig, frame):
-        console.clear()
+        try:
+            console.clear()
+        except Exception:
+            pass
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # Main loop
+    # Single-shot mode
     if args.once:
-        feeds = [collect_feed_data(f) for f in config.feeds]
+        feeds = [collect_feed_data(f, config) for f in config.feeds]
         renderable = render_dashboard(console, config, feeds)
         console.print(renderable)
         sys.exit(0)
 
+    # Interactive mode with keyboard input
+    _run_interactive(console, config)
+
+
+def _run_interactive(console: Console, config: DashboardConfig) -> None:
+    """Run the interactive dashboard loop with keyboard support."""
+    import select
+    import termios
+    import tty
+
     from rich.live import Live
 
-    with Live(console=console, refresh_per_second=1, screen=True) as live:
-        while True:
-            feeds = [collect_feed_data(f) for f in config.feeds]
-            renderable = render_dashboard(console, config, feeds)
-            live.update(renderable)
-            time.sleep(config.refresh_interval)
+    focused_feed: Optional[int] = None
+    sort_options = ["seen", "distance", "altitude", "rssi"]
+
+    # Set up non-blocking terminal input
+    stdin_fd = sys.stdin.fileno()
+    old_settings = None
+    try:
+        old_settings = termios.tcgetattr(stdin_fd)
+        tty.setcbreak(stdin_fd)
+    except (termios.error, OSError):
+        # Not a real terminal (piped input, etc.)
+        old_settings = None
+
+    try:
+        with Live(console=console, refresh_per_second=1, screen=True) as live:
+            while True:
+                feeds = [collect_feed_data(f, config) for f in config.feeds]
+                renderable = render_dashboard(console, config, feeds, focused_feed=focused_feed)
+                live.update(renderable)
+
+                # Log if configured
+                if config.log_path:
+                    log_cycle(feeds, config.log_path)
+
+                # Poll for keyboard input during sleep
+                deadline = time.time() + config.refresh_interval
+                while time.time() < deadline:
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        break
+
+                    if old_settings is None:
+                        time.sleep(min(remaining, 0.1))
+                        continue
+
+                    ready, _, _ = select.select([sys.stdin], [], [], min(remaining, 0.1))
+                    if ready:
+                        key = sys.stdin.read(1)
+                        if key == "q":
+                            return
+                        elif key == "s":
+                            config.compact_mode = not config.compact_mode
+                        elif key == "f":
+                            # Cycle sort
+                            idx = sort_options.index(config.sort_by) if config.sort_by in sort_options else 0
+                            config.sort_by = sort_options[(idx + 1) % len(sort_options)]
+                        elif key == "0":
+                            focused_feed = None
+                        elif key.isdigit():
+                            num = int(key) - 1
+                            if 0 <= num < len(config.feeds):
+                                focused_feed = num
+                            else:
+                                focused_feed = None
+                        # Force immediate re-render on keypress
+                        break
+    finally:
+        if old_settings is not None:
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
 
 
 if __name__ == "__main__":
