@@ -11,7 +11,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+import re
+
 from .config import AlertConfig, DashboardConfig, FeedConfig
+
+_VALID_SERVICE_NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.@-]*$")
 
 
 @dataclass
@@ -501,6 +505,10 @@ def _check_service(data: FeedData) -> None:
         data.service_active = "unknown"
         return
 
+    if not _VALID_SERVICE_NAME.match(svc):
+        data.service_active = "invalid name"
+        return
+
     try:
         result = subprocess.run(
             ["systemctl", "is-active", svc],
@@ -514,7 +522,7 @@ def _check_service(data: FeedData) -> None:
 def _check_uptime(data: FeedData) -> None:
     """Get service uptime from systemd."""
     svc = data.config.service_name
-    if not svc:
+    if not svc or not _VALID_SERVICE_NAME.match(svc):
         return
 
     try:
@@ -575,7 +583,7 @@ _PORT_CACHE_TTL = 30.0  # Refresh ports every 30 seconds
 def _check_ports_cached(data: FeedData) -> None:
     """Detect listening ports with caching."""
     svc = data.config.service_name
-    if not svc:
+    if not svc or not _VALID_SERVICE_NAME.match(svc):
         return
 
     now = time.time()
@@ -619,7 +627,7 @@ def _detect_ports_for_service(svc: str) -> list[str]:
 def _check_process_stats(data: FeedData) -> None:
     """Get CPU and memory usage for the service process."""
     svc = data.config.service_name
-    if not svc:
+    if not svc or not _VALID_SERVICE_NAME.match(svc):
         return
 
     try:
