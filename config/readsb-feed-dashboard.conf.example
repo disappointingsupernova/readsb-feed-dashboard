@@ -1,0 +1,37 @@
+{
+  "title": "readsb Multi-Feed Dashboard",
+  "refresh_interval": 2.0,
+  "unicode_mode": true,
+  "max_aircraft_rows": 10,
+  "show_ports": true,
+  "show_service_status": true,
+  "feeds": [
+    {
+      "label": "SDR1",
+      "json_path": "/run/readsb-sdr1/aircraft.json",
+      "service_name": "readsb-sdr1",
+      "feed_type": "sdr",
+      "beast_port": 30105,
+      "sbs_port": null,
+      "serial": "64466840"
+    },
+    {
+      "label": "SDR2",
+      "json_path": "/run/readsb-sdr2/aircraft.json",
+      "service_name": "readsb-sdr2",
+      "feed_type": "sdr",
+      "beast_port": 30205,
+      "sbs_port": null,
+      "serial": "95440338"
+    },
+    {
+      "label": "MERGED",
+      "json_path": "/run/readsb/aircraft.json",
+      "service_name": "readsb",
+      "feed_type": "merge",
+      "beast_port": 30005,
+      "sbs_port": 30003,
+      "serial": null
+    }
+  ]
+}
