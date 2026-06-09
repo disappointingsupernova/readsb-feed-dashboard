@@ -10,7 +10,15 @@
   "stale_threshold": 10.0,
   "sparkline_length": 60,
   "compact_mode": false,
+  "show_help_bar": true,
   "log_path": null,
+  "distance_rings": [50, 100, 150, 200],
+  "web_enabled": false,
+  "web_port": 8754,
+  "web_bind": "0.0.0.0",
+  "notification_webhook_url": null,
+  "notification_script": null,
+  "notification_cooldown": 300.0,
   "feeds": [
     {
       "label": "SDR1",
@@ -20,6 +28,9 @@
       "beast_port": 30105,
       "sbs_port": null,
       "serial": "64466840",
+      "gain": null,
+      "receiver_lat": null,
+      "receiver_lon": null,
       "alerts": {
         "min_aircraft": 5,
         "alert_on_service_inactive": true,
@@ -34,6 +45,7 @@
       "beast_port": 30205,
       "sbs_port": null,
       "serial": "95440338",
+      "gain": null,
       "alerts": {
         "min_aircraft": 5,
         "alert_on_service_inactive": true,
