@@ -2,7 +2,7 @@
 
 A polished terminal dashboard for monitoring multi-readsb ADS-B setups.
 
-Displays live aircraft counts, per-feed statistics, overlap analysis, service health, and detailed aircraft tables — all in a single terminal view.
+Displays live aircraft counts, per-feed statistics, overlap analysis, service health, external feeder status, and detailed aircraft tables — all in a single terminal view.
 
 ## Quick Start
 
@@ -30,12 +30,15 @@ readsb-feed-dashboard --help
 - Service uptime display
 - Signal strength statistics (min/avg/max RSSI) with colour coding
 - Aircraft type breakdown (ADS-B, MLAT, TIS-B, Mode-S)
+- Distance calculation via haversine (from receiver.json or config)
 - Distance ring distribution (50/100/150/200+ nm)
 - Feed health sparkline graphs
 - CPU, memory, and network I/O per service
 - Threshold-based alerts (aircraft count, service down, stale JSON)
-- Remote feed monitoring over HTTP
+- Remote feed monitoring over HTTP (with SSRF protection)
+- FR24 feeder status auto-detection (process, link, radar ID, aircraft tracked/uploaded)
 - Displays latest aircraft with hex, callsign, altitude, speed, RSSI, squawk, distance, type, and seen time
+- Side-by-side aircraft tables on wide terminals
 - Reports service status (active/inactive/failed)
 - Detects stale or missing JSON files
 - ASCII-safe mode for terminals without Unicode support
@@ -45,10 +48,21 @@ readsb-feed-dashboard --help
 - Configurable sort (seen, distance, altitude, RSSI)
 - Compact/summary-only mode
 - Three colour themes (dark, light, solarised)
-- CSV logging for historical data
+- CSV logging with automatic rotation (50 MB cap)
 - JSON export for external tooling
 - Watchdog mode for scripts and cron
 - tmux/screen auto-detection with throttling
+
+## Security
+
+- URL scheme validation (http/https only, metadata endpoint blocking)
+- Path traversal prevention (symlink resolution, allowed directory prefixes)
+- Service name validation (strict regex before subprocess calls)
+- Config file size limits (1 MB max)
+- Log file rotation (50 MB cap)
+- PID TOCTOU protection (process name verification)
+- Pinned dependency versions
+- No shell=True in any subprocess call
 
 ## Requirements
 
@@ -56,6 +70,7 @@ readsb-feed-dashboard --help
 - Python 3.9+
 - `rich` Python package (installed automatically)
 - Optional: `jq`, `ss` (iproute2) for extended diagnostics
+- Optional: `fr24feed-status` for FR24 feeder panel
 
 ## Configuration
 

@@ -35,12 +35,13 @@ If no config file is found, auto-detection is used.
     {
       "label": "SDR1",
       "json_path": "/run/readsb-sdr1/aircraft.json",
-      "json_url": null,
       "service_name": "readsb-sdr1",
       "feed_type": "sdr",
       "beast_port": 30105,
       "sbs_port": null,
       "serial": "64466840",
+      "receiver_lat": 53.1234,
+      "receiver_lon": -6.5678,
       "alerts": {
         "min_aircraft": 5,
         "alert_on_service_inactive": true,
@@ -97,12 +98,14 @@ If no config file is found, auto-detection is used.
 |---|---|---|---|
 | `label` | string | Yes | Display name for this feed |
 | `json_path` | string | No* | Path to local `aircraft.json` |
-| `json_url` | string | No* | URL to remote `aircraft.json` |
-| `service_name` | string | No | systemd service name |
+| `json_url` | string | No* | URL to remote `aircraft.json` (http/https only) |
+| `service_name` | string | No | systemd service name (alphanumeric, hyphens, dots only) |
 | `feed_type` | string | No | `"sdr"` or `"merge"` |
 | `beast_port` | int | No | Beast output port number |
 | `sbs_port` | int | No | SBS (BaseStation) output port |
 | `serial` | string | No | RTL-SDR dongle serial number |
+| `receiver_lat` | float | No | Receiver latitude (for distance calculation) |
+| `receiver_lon` | float | No | Receiver longitude (for distance calculation) |
 | `alerts` | object | No | Alert thresholds (see below) |
 
 *Either `json_path` or `json_url` must be provided.
@@ -115,9 +118,19 @@ If no config file is found, auto-detection is used.
 | `alert_on_service_inactive` | bool | `true` | Alert if systemd service goes inactive/failed |
 | `alert_on_stale_json` | bool | `true` | Alert if JSON data becomes stale |
 
+## Distance Calculation
+
+The dashboard computes aircraft distance in nautical miles using the haversine formula. It looks for receiver position in this order:
+
+1. `receiver_lat`/`receiver_lon` in the feed's config
+2. `receiver.json` in the same directory as `aircraft.json`
+3. `receiver.json` in sibling `/run/readsb*` directories (e.g. SDR feeds use the merge feed's receiver.json)
+
+If no receiver position is found, the distance column shows `-`.
+
 ## Remote Feeds
 
-To monitor a readsb instance on another machine (via tar1090 or raw HTTP):
+To monitor a readsb instance on another machine:
 
 ```json
 {
@@ -126,6 +139,12 @@ To monitor a readsb instance on another machine (via tar1090 or raw HTTP):
   "feed_type": "sdr"
 }
 ```
+
+Remote feed restrictions (security):
+- Only `http://` and `https://` schemes are allowed
+- Loopback addresses (127.x.x.x) are blocked
+- Link-local addresses (169.254.x.x) are blocked
+- Cloud metadata endpoints are blocked
 
 Remote feeds will not have service status, uptime, CPU/memory, or port information — only aircraft data.
 
@@ -138,6 +157,7 @@ When no config file is present, the dashboard will:
 3. Parse `/etc/default/readsb*` files for serial numbers and port configs
 4. Check the `LANG`/`LC_ALL` environment for Unicode support
 5. Detect tmux/screen and auto-increase refresh interval
+6. Detect `fr24feed-status` and show FR24 panel if available
 
 ### Detected Paths
 
@@ -159,7 +179,7 @@ readsb-feed-dashboard --dump-config
 Save it directly as your config:
 
 ```bash
-readsb-feed-dashboard --dump-config > /etc/readsb-feed-dashboard.conf
+readsb-feed-dashboard --dump-config | sudo tee /etc/readsb-feed-dashboard.conf
 ```
 
 ## Themes
@@ -175,3 +195,11 @@ Darker tones designed for terminals with white/light backgrounds.
 ### Solarised
 
 Uses the [Solarised](https://ethanschoonover.com/solarized/) colour palette.
+
+## Config File Limits
+
+For security, the config file is rejected if:
+- It exceeds 1 MB in size
+- `json_path` resolves outside `/run/`, `/tmp/`, or `/var/`
+- `json_url` uses a scheme other than http/https
+- `service_name` contains characters outside `[a-zA-Z0-9_.@-]`

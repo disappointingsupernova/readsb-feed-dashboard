@@ -31,75 +31,53 @@ To display additional aircraft fields:
 1. Create a new `build_*_panel()` function in `renderer.py`
 2. Call it from `render_dashboard()` and append to the renderables list
 
-## Remote Feeds
+## Adding a New External Feeder
 
-For monitoring a remote readsb instance, you could extend the collector to fetch JSON over HTTP:
+The `feeders.py` module handles external feeder detection. To add support for a new feeder (e.g. piaware, rbfeeder):
 
-```python
-import urllib.request
+1. Create a dataclass for the feeder's status (like `FR24Status`)
+2. Add a detection/collection function (like `_collect_fr24`)
+3. Add the field to `ExternalFeeders`
+4. Call it from `collect_external_feeders()`
+5. Add a panel builder in `renderer.py`
+6. Call the panel builder from `render_dashboard()`
 
-def _read_json_remote(url: str) -> dict:
-    """Fetch aircraft.json from a remote tar1090/readsb web interface."""
-    with urllib.request.urlopen(url, timeout=5) as resp:
-        return json.loads(resp.read())
-```
-
-Config addition:
-
-```json
-{
-  "label": "REMOTE-PI",
-  "json_url": "http://192.168.1.50/tar1090/data/aircraft.json",
-  "feed_type": "sdr"
-}
-```
-
-## Historical Data / Logging
-
-To add logging of aircraft counts over time:
+Example skeleton for piaware:
 
 ```python
-import csv
-from datetime import datetime
+@dataclass
+class PiawareStatus:
+    available: bool = False
+    process_running: bool = False
+    connected_to_flightaware: bool = False
+    aircraft_reported: Optional[int] = None
 
-def log_counts(feeds: list[FeedData], log_path: str = "/var/log/readsb-dashboard.csv"):
-    """Append current counts to a CSV log."""
-    now = datetime.now().isoformat()
-    with open(log_path, "a", newline="") as f:
-        writer = csv.writer(f)
-        for feed in feeds:
-            writer.writerow([now, feed.config.label, feed.aircraft_count])
-```
-
-## Alerting
-
-To add alerts when aircraft count drops to zero or a service goes down:
-
-```python
-import subprocess
-
-def check_alerts(feeds: list[FeedData]):
-    """Send a desktop notification if a feed goes down."""
-    for feed in feeds:
-        if feed.service_active == "failed":
-            subprocess.run([
-                "notify-send", "--urgency=critical",
-                f"readsb-feed-dashboard: {feed.config.label} FAILED"
-            ])
+def _collect_piaware() -> Optional[PiawareStatus]:
+    if not _command_exists("piaware-status"):
+        return None
+    # Parse piaware-status output...
 ```
 
 ## Custom Colour Schemes
 
-Edit the colour constants at the top of `renderer.py`:
+Edit the `THEMES` dictionary in `config.py`:
 
 ```python
-COLOUR_ACTIVE = "green"
-COLOUR_INACTIVE = "red"
-COLOUR_STALE = "yellow"
-COLOUR_TITLE = "bold cyan"
+THEMES = {
+    "dark": {
+        "active": "green",
+        "inactive": "red",
+        ...
+    },
+    "my_custom_theme": {
+        "active": "#00ff00",
+        "inactive": "#ff0000",
+        ...
+    },
+}
 ```
 
-Rich supports any [Rich colour string](https://rich.readthedocs.io/en/latest/appendix/colors.html).
+Rich supports any [Rich colour string](https://rich.readthedocs.io/en/latest/appendix/colors.html) including hex codes.
 
 ## Architecture for Extensions
 
@@ -107,23 +85,46 @@ Rich supports any [Rich colour string](https://rich.readthedocs.io/en/latest/app
 graph TD
     A[Core Dashboard] --> B[Local JSON Collector]
     A --> C[Remote HTTP Collector]
-    A --> D[MQTT Collector]
-    A --> E[CSV Logger]
-    A --> F[Alert Engine]
-    A --> G[Web Export]
+    A --> D[FR24 Feeder]
+    A --> E[piaware - future]
+    A --> F[rbfeeder - future]
+    A --> G[CSV Logger]
+    A --> H[Alert Engine]
+    A --> I[JSON Export]
+    A --> J[Watchdog]
 
     style B fill:#4caf50,color:#fff
     style C fill:#2196f3,color:#fff
     style D fill:#ff9800,color:#fff
-    style E fill:#9c27b0,color:#fff
-    style F fill:#f44336,color:#fff
-    style G fill:#607d8b,color:#fff
+    style E fill:#ff9800,color:#fff
+    style F fill:#ff9800,color:#fff
+    style G fill:#9c27b0,color:#fff
+    style H fill:#f44336,color:#fff
+    style I fill:#607d8b,color:#fff
+    style J fill:#607d8b,color:#fff
 ```
+
+## Built-in Features (No Extension Needed)
+
+These features are already implemented — no code changes required:
+
+| Feature | How to use |
+|---|---|
+| Remote feeds | Add `json_url` to config |
+| Alerts | Add `alerts` block to feed config |
+| CSV logging | Use `--log` flag or `log_path` config |
+| JSON export | Use `--export json` |
+| Watchdog | Use `--watchdog` |
+| Custom sort | Use `--sort` flag or `sort_by` config |
+| Compact mode | Use `--compact` flag or press `s` |
+| Focus single feed | Press `1`, `2`, `3`, etc. |
+| FR24 status | Auto-detected if `fr24feed-status` is on PATH |
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Run tests: `python3 -m pytest`
-5. Submit a pull request
+4. Ensure service names and paths are validated (see security.md)
+5. Run tests: `python3 -m pytest`
+6. Submit a pull request
