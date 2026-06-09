@@ -19,8 +19,14 @@ class FR24Status:
     link_connected: bool = False
     link_mode: Optional[str] = None  # "UDP", "TCP", etc.
     radar_id: Optional[str] = None
+    has_sharing_key: bool = False
+    receiver_connected: bool = False
+    receiver_aircraft: Optional[int] = None
+    mlat_ok: bool = False
+    mlat_aircraft_seen: Optional[int] = None
     aircraft_tracked: Optional[int] = None
     aircraft_uploaded: Optional[int] = None
+    stats_timestamp: Optional[str] = None
     service_active: Optional[str] = None
 
 
@@ -40,7 +46,6 @@ def collect_external_feeders() -> ExternalFeeders:
 
 def _collect_fr24() -> Optional[FR24Status]:
     """Collect fr24feed status if available."""
-    # Check if fr24feed-status command exists
     if not _command_exists("fr24feed-status"):
         return None
 
@@ -59,49 +64,81 @@ def _collect_fr24() -> Optional[FR24Status]:
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return status
 
-    # Parse output
+    # Parse output line by line
     for line in output.splitlines():
-        line_lower = line.lower().strip()
+        line_stripped = line.strip()
+        line_lower = line_stripped.lower()
 
-        # Process status
-        if "process" in line_lower:
+        # FR24 Feeder/Decoder Process: running
+        if "process" in line_lower and ("feeder" in line_lower or "decoder" in line_lower):
             status.process_running = "running" in line_lower
 
-        # Link status
-        if "link" in line_lower:
+        # FR24 Stats Timestamp: 2025-01-15 14:32:07
+        elif "stats timestamp" in line_lower:
+            parts = line_stripped.split(":", 1)
+            if len(parts) == 2:
+                val = parts[1].strip()
+                if val and val != "---":
+                    status.stats_timestamp = val
+
+        # FR24 Link: connected [UDP]
+        elif "link" in line_lower and "fr24" in line_lower:
             status.link_connected = "connected" in line_lower
-            # Extract mode (UDP/TCP)
-            mode_match = re.search(r"\[(UDP|TCP)\]", line, re.IGNORECASE)
+            mode_match = re.search(r"\[(UDP|TCP)\]", line_stripped, re.IGNORECASE)
             if mode_match:
                 status.link_mode = mode_match.group(1).upper()
 
-        # Radar ID
-        if "radar" in line_lower:
-            parts = line.split(":", 1)
+        # FR24 Radar: T-EGCC979
+        elif "radar" in line_lower:
+            parts = line_stripped.split(":", 1)
             if len(parts) == 2:
-                radar_val = parts[1].strip()
-                if radar_val and radar_val != "---":
-                    status.radar_id = radar_val
+                val = parts[1].strip()
+                if val and val != "---":
+                    status.radar_id = val
 
-        # Aircraft tracked/uploaded
-        if "aircraft" in line_lower and "tracked" in line_lower:
-            num_match = re.search(r"(\d+)", line)
+        # FR24 Sharing Key: xxxxxxxxxxxx (or valid/configured)
+        elif "sharing key" in line_lower or "sharing" in line_lower:
+            parts = line_stripped.split(":", 1)
+            if len(parts) == 2:
+                val = parts[1].strip()
+                status.has_sharing_key = bool(val) and val != "---" and "not" not in val.lower()
+
+        # Receiver: connected (17 aircraft)
+        elif line_lower.startswith("receiver"):
+            status.receiver_connected = "connected" in line_lower
+            num_match = re.search(r"\((\d+)\s+aircraft\)", line_stripped, re.IGNORECASE)
+            if num_match:
+                status.receiver_aircraft = int(num_match.group(1))
+
+        # FR24 MLAT: ok
+        elif "mlat" in line_lower and "ac" not in line_lower:
+            status.mlat_ok = "ok" in line_lower or "running" in line_lower
+
+        # FR24 MLAT AC seen: 3
+        elif "mlat" in line_lower and ("ac" in line_lower or "aircraft" in line_lower):
+            num_match = re.search(r"(\d+)", line_stripped)
+            if num_match:
+                status.mlat_aircraft_seen = int(num_match.group(1))
+
+        # Aircraft Tracked: 17 / Aircraft Uploaded: 15
+        elif "aircraft" in line_lower and "tracked" in line_lower:
+            num_match = re.search(r"(\d+)", line_stripped)
             if num_match:
                 status.aircraft_tracked = int(num_match.group(1))
 
-        if "aircraft" in line_lower and "uploaded" in line_lower:
-            num_match = re.search(r"(\d+)", line)
+        elif "aircraft" in line_lower and "uploaded" in line_lower:
+            num_match = re.search(r"(\d+)", line_stripped)
             if num_match:
                 status.aircraft_uploaded = int(num_match.group(1))
 
-    # Also try parsing the monitor file if it exists
+    # Also try parsing the monitor JSON if it exists
     _parse_fr24_monitor(status)
 
     return status
 
 
 def _parse_fr24_monitor(status: FR24Status) -> None:
-    """Try to parse /var/log/fr24feed/fr24feed.log or monitor JSON for extra stats."""
+    """Try to parse /run/fr24feed/fr24feed.json for additional stats."""
     monitor_path = Path("/run/fr24feed/fr24feed.json")
     if not monitor_path.exists():
         return
@@ -112,9 +149,9 @@ def _parse_fr24_monitor(status: FR24Status) -> None:
             data = json.load(f)
 
         if isinstance(data, dict):
-            if "aircraft_tracked" in data:
+            if "aircraft_tracked" in data and status.aircraft_tracked is None:
                 status.aircraft_tracked = int(data["aircraft_tracked"])
-            if "aircraft_uploaded" in data:
+            if "aircraft_uploaded" in data and status.aircraft_uploaded is None:
                 status.aircraft_uploaded = int(data["aircraft_uploaded"])
     except (json.JSONDecodeError, PermissionError, OSError, ValueError, KeyError):
         pass

@@ -369,11 +369,37 @@ def build_fr24_panel(fr24: FR24Status, config: DashboardConfig) -> Panel:
     if fr24.radar_id:
         info.add_row("Radar:", fr24.radar_id)
 
+    # Sharing key
+    if fr24.has_sharing_key:
+        info.add_row("Sharing key:", Text("configured", style=theme["active"]))
+
+    # Receiver
+    if fr24.receiver_connected:
+        recv_str = "connected"
+        if fr24.receiver_aircraft is not None:
+            recv_str += f" ({fr24.receiver_aircraft} ac)"
+        info.add_row("Receiver:", Text(recv_str, style=theme["active"]))
+    else:
+        info.add_row("Receiver:", Text("disconnected", style=theme["inactive"]))
+
+    # MLAT
+    if fr24.mlat_ok:
+        mlat_str = "ok"
+        if fr24.mlat_aircraft_seen is not None:
+            mlat_str += f" ({fr24.mlat_aircraft_seen} ac)"
+        info.add_row("MLAT:", Text(mlat_str, style=theme["active"]))
+    else:
+        info.add_row("MLAT:", Text("not active", style=theme["stale"]))
+
     # Aircraft stats
     if fr24.aircraft_tracked is not None:
         info.add_row("Tracked:", str(fr24.aircraft_tracked))
     if fr24.aircraft_uploaded is not None:
         info.add_row("Uploaded:", str(fr24.aircraft_uploaded))
+
+    # Stats timestamp
+    if fr24.stats_timestamp:
+        info.add_row("Last stats:", fr24.stats_timestamp)
 
     border_style = theme["feed_panel_ok"] if fr24.link_connected else theme["feed_panel_bad"]
 
@@ -398,10 +424,18 @@ def render_dashboard(console: Console, config: DashboardConfig, feeds: list[Feed
     # Header
     renderables.append(build_header(config))
 
-    # Alerts
+    # Alerts and external feeders side-by-side
     alerts_panel = build_alerts_panel(feeds, config)
-    if alerts_panel:
+    fr24_panel = None
+    if external_feeders and external_feeders.fr24 and external_feeders.fr24.available:
+        fr24_panel = build_fr24_panel(external_feeders.fr24, config)
+
+    if alerts_panel and fr24_panel:
+        renderables.append(Columns([alerts_panel, fr24_panel], equal=True, expand=True))
+    elif alerts_panel:
         renderables.append(alerts_panel)
+    elif fr24_panel:
+        renderables.append(fr24_panel)
 
     # If focused on a single feed
     if focused_feed is not None and 0 <= focused_feed < len(feeds):
@@ -410,10 +444,6 @@ def render_dashboard(console: Console, config: DashboardConfig, feeds: list[Feed
         if not config.compact_mode:
             renderables.append(build_aircraft_table(feed, config))
         return Group(*renderables)
-
-    # External feeders (FR24, etc.)
-    if external_feeders and external_feeders.fr24 and external_feeders.fr24.available:
-        renderables.append(build_fr24_panel(external_feeders.fr24, config))
 
     # Summary
     renderables.append(build_summary_panel(feeds, overlaps, config))
