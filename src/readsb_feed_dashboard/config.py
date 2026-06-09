@@ -109,14 +109,15 @@ class FeedConfig:
 
     label: str
     json_path: Optional[str] = None
-    json_url: Optional[str] = None  # Remote feed support
+    json_url: Optional[str] = None
     service_name: Optional[str] = None
-    feed_type: str = "sdr"  # "sdr" or "merge"
+    feed_type: str = "sdr"
     beast_port: Optional[int] = None
     sbs_port: Optional[int] = None
     serial: Optional[str] = None
     receiver_lat: Optional[float] = None
     receiver_lon: Optional[float] = None
+    gain: Optional[str] = None
     alerts: Optional[AlertConfig] = None
 
 
@@ -137,6 +138,8 @@ class DashboardConfig:
     sparkline_length: int = 60
     compact_mode: bool = False
     log_path: Optional[str] = None
+    distance_rings: list[int] = field(default_factory=lambda: [50, 100, 150, 200])
+    show_help_bar: bool = True
 
     @classmethod
     def load(cls, config_path: Optional[str] = None) -> "DashboardConfig":
@@ -190,6 +193,7 @@ class DashboardConfig:
                 serial=fd.get("serial"),
                 receiver_lat=fd.get("receiver_lat"),
                 receiver_lon=fd.get("receiver_lon"),
+                gain=fd.get("gain"),
                 alerts=alerts,
             ))
 
@@ -207,6 +211,8 @@ class DashboardConfig:
             sparkline_length=data.get("sparkline_length", 60),
             compact_mode=data.get("compact_mode", False),
             log_path=data.get("log_path"),
+            distance_rings=data.get("distance_rings", [50, 100, 150, 200]),
+            show_help_bar=data.get("show_help_bar", True),
         )
 
     @classmethod
@@ -232,6 +238,7 @@ class DashboardConfig:
                     beast_port=beast_port,
                     sbs_port=sbs_port,
                     serial=serial,
+                    gain=_detect_gain(service_name),
                 ))
 
         # Also scan for any systemd readsb services we may have missed
@@ -369,6 +376,34 @@ def _detect_ports(service_name: Optional[str]) -> tuple[Optional[int], Optional[
                 pass
 
     return beast_port, sbs_port
+
+
+def _detect_gain(service_name: Optional[str]) -> Optional[str]:
+    """Detect the --gain setting from the service config."""
+    if not service_name:
+        return None
+
+    config_paths = [
+        f"/etc/default/{service_name}",
+        "/etc/default/readsb",
+    ]
+
+    for config_path in config_paths:
+        if Path(config_path).exists():
+            try:
+                with open(config_path, "r") as f:
+                    content = f.read()
+                for line in content.splitlines():
+                    if "gain" in line.lower():
+                        parts = line.split()
+                        for i, part in enumerate(parts):
+                            if part == "--gain" and i + 1 < len(parts):
+                                return parts[i + 1].strip('"').strip("'")
+                            if part.startswith("--gain="):
+                                return part.split("=", 1)[1].strip('"').strip("'")
+            except (PermissionError, OSError):
+                pass
+    return None
 
 
 def _extract_port(line: str, flag: str) -> Optional[int]:
