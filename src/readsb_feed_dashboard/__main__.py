@@ -122,6 +122,28 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Render the dashboard once and exit (useful for screenshots/debugging).",
     )
+    parser.add_argument(
+        "--web",
+        type=int,
+        nargs="?",
+        const=8754,
+        default=None,
+        metavar="PORT",
+        help="Start web server on PORT (default: 8754) with JSON API and Prometheus metrics.",
+    )
+    parser.add_argument(
+        "--replay",
+        type=str,
+        default=None,
+        metavar="CSV_FILE",
+        help="Replay a CSV log file as simulated live data.",
+    )
+    parser.add_argument(
+        "--replay-speed",
+        type=float,
+        default=1.0,
+        help="Replay speed multiplier (default: 1.0).",
+    )
 
     return parser.parse_args()
 
@@ -391,6 +413,20 @@ def main() -> None:
     # Initialise history with configured sparkline length
     init_history(config.sparkline_length)
 
+    # Load plugins
+    from .plugins import discover_and_load_plugins
+    discover_and_load_plugins()
+
+    # Load aircraft database
+    from .aircraftdb import load_database
+    load_database()
+
+    # Start web server if requested
+    if args.web:
+        from .web import start_web_server
+        start_web_server(port=args.web)
+        print(f"Web server started on port {args.web}", file=sys.stderr)
+
     # Set up console
     console = Console(force_terminal=True)
     if not config.unicode_mode:
@@ -414,6 +450,11 @@ def main() -> None:
         sys_info = collect_system_info()
         renderable = render_dashboard(console, config, feeds, external_feeders=external, sys_info=sys_info)
         console.print(renderable)
+        sys.exit(0)
+
+    # Replay mode
+    if args.replay:
+        _run_replay(console, config, args.replay, args.replay_speed)
         sys.exit(0)
 
     # Interactive mode with keyboard input
@@ -463,6 +504,31 @@ def _run_interactive(console: Console, config: DashboardConfig) -> None:
                 renderable = render_dashboard(console, config, feeds, focused_feed=focused_feed, external_feeders=external_feeders, sys_info=sys_info, compare_mode=compare_mode)
                 live.update(renderable)
 
+                # Update web server state if running
+                try:
+                    from .web import update_web_state
+                    overlaps = compute_overlaps(feeds)
+                    update_web_state(feeds, overlaps)
+                except ImportError:
+                    pass
+
+                # Send notifications for any alerts
+                all_alerts = [a for f in feeds for a in f.alerts]
+                if all_alerts:
+                    try:
+                        from .notifications import send_notifications, NotificationConfig
+                        # TODO: load notification config from config file
+                        send_notifications(all_alerts, None)
+                    except ImportError:
+                        pass
+
+                # Notify plugin collectors
+                try:
+                    from .plugins import get_registry
+                    get_registry().notify_collectors(feeds=feeds, config=config)
+                except ImportError:
+                    pass
+
                 # Log if configured
                 if config.log_path:
                     log_cycle(feeds, config.log_path)
@@ -504,6 +570,59 @@ def _run_interactive(console: Console, config: DashboardConfig) -> None:
     finally:
         if old_settings is not None:
             termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
+
+
+def _run_replay(console: Console, config: DashboardConfig, csv_path: str, speed: float) -> None:
+    """Run the dashboard in replay mode from a CSV log file."""
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.text import Text
+
+    from .replay import load_replay_data, replay_generator
+
+    try:
+        frames = load_replay_data(csv_path)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if not frames:
+        print("No data found in replay file.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Loaded {len(frames)} frames from {csv_path}. Replaying at {speed}x speed...", file=sys.stderr)
+
+    with Live(console=console, refresh_per_second=1, screen=True) as live:
+        for frame in replay_generator(frames, speed=speed):
+            # Build a simple replay display
+            from rich.table import Table
+            from rich.console import Group as RGroup
+
+            header = Panel(
+                Text(f"REPLAY: {frame.timestamp}", style="bold yellow", justify="center"),
+                border_style="yellow",
+            )
+
+            table = Table(show_header=True, header_style="bold white", padding=(0, 1))
+            table.add_column("Feed", style="cyan")
+            table.add_column("Aircraft", justify="right")
+            table.add_column("Tracked", justify="right")
+            table.add_column("Msgs/s", justify="right")
+            table.add_column("Service")
+
+            for feed_label, data in frame.feeds.items():
+                svc = data.get("service_active", "?")
+                svc_text = Text(svc, style="green" if svc == "active" else "red")
+                rate = f"{data['messages_rate']:.0f}" if data.get("messages_rate") else "-"
+                table.add_row(
+                    feed_label,
+                    str(data.get("aircraft_count", 0)),
+                    str(data.get("position_tracked", 0)),
+                    rate,
+                    svc_text,
+                )
+
+            live.update(RGroup(header, table))
 
 
 if __name__ == "__main__":
