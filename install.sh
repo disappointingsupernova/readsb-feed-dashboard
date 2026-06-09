@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # install.sh — Install readsb-feed-dashboard
-# Requires: Python 3.9+, pip, git
+# Requires: Python 3.9+, git
 
 set -euo pipefail
 
 INSTALL_DIR="/opt/readsb-feed-dashboard"
+VENV_DIR="${INSTALL_DIR}/.venv"
 SYMLINK="/usr/local/bin/readsb-feed-dashboard"
 CONFIG_DIR="/etc"
 CONFIG_FILE="${CONFIG_DIR}/readsb-feed-dashboard.conf"
-REPO_URL="https://github.com/disappointingsupernova/readsb-feed-dashboard.git"
+REPO_URL="https://github.com/Louis/readsb-feed-dashboard.git"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -28,7 +29,7 @@ check_root() {
 
 check_python() {
     if ! command -v python3 &>/dev/null; then
-        error "Python 3.9+ is required. Install with: sudo apt install python3 python3-pip"
+        error "Python 3.9+ is required. Install with: sudo apt install python3 python3-venv"
     fi
 
     local version
@@ -42,6 +43,12 @@ check_python() {
     fi
 
     info "Python $version detected."
+
+    # Ensure python3-venv is available
+    if ! python3 -m venv --help &>/dev/null 2>&1; then
+        info "Installing python3-venv..."
+        apt-get install -y python3-venv || error "Failed to install python3-venv. Run: sudo apt install python3-venv"
+    fi
 }
 
 check_dependencies() {
@@ -81,33 +88,24 @@ install_app() {
         fi
     fi
 
-    # Install Python package
-    info "Installing Python package..."
-    python3 -m pip install --break-system-packages "$INSTALL_DIR" 2>/dev/null || \
-    python3 -m pip install "$INSTALL_DIR" || \
-    error "Failed to install Python package."
-
-    # Create symlink
-    if [[ -L "$SYMLINK" ]] || [[ -f "$SYMLINK" ]]; then
-        rm -f "$SYMLINK"
+    # Create or update virtual environment
+    if [[ ! -d "$VENV_DIR" ]]; then
+        info "Creating virtual environment at ${VENV_DIR}..."
+        python3 -m venv "$VENV_DIR"
     fi
 
-    # Find the installed script
-    local script_path
-    script_path=$(python3 -c "import shutil; print(shutil.which('readsb-feed-dashboard') or '')" 2>/dev/null)
+    # Install into venv
+    info "Installing Python package into virtual environment..."
+    "${VENV_DIR}/bin/pip" install --upgrade pip setuptools wheel 2>/dev/null || true
+    "${VENV_DIR}/bin/pip" install --upgrade "$INSTALL_DIR" || error "Failed to install Python package."
 
-    if [[ -n "$script_path" ]]; then
-        ln -sf "$script_path" "$SYMLINK"
-        info "Symlink created: $SYMLINK -> $script_path"
-    else
-        # Create a wrapper script
-        cat > "$SYMLINK" << 'EOF'
+    # Create wrapper script that uses the venv
+    info "Creating wrapper script at ${SYMLINK}..."
+    cat > "$SYMLINK" << EOF
 #!/usr/bin/env bash
-exec python3 -m readsb_feed_dashboard "$@"
+exec "${VENV_DIR}/bin/python" -m readsb_feed_dashboard "\$@"
 EOF
-        chmod +x "$SYMLINK"
-        info "Wrapper script created at $SYMLINK"
-    fi
+    chmod +x "$SYMLINK"
 
     # Install example config if none exists
     if [[ ! -f "$CONFIG_FILE" ]]; then
@@ -134,6 +132,7 @@ print_summary() {
     echo
     echo "  Config file: $CONFIG_FILE"
     echo "  Install dir: $INSTALL_DIR"
+    echo "  Virtual env: $VENV_DIR"
     echo
 }
 

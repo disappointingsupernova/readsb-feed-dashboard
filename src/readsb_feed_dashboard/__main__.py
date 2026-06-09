@@ -129,30 +129,46 @@ def handle_update() -> None:
     """Handle the --update flag."""
     print("Updating readsb-feed-dashboard...")
 
-    if INSTALL_DIR.exists():
-        try:
-            subprocess.run(
-                ["git", "-C", str(INSTALL_DIR), "pull", "--ff-only"],
-                check=True,
-            )
-            print("Repository updated successfully.")
-        except subprocess.CalledProcessError:
-            print("Error: Failed to pull updates. Check your network connection.", file=sys.stderr)
-            sys.exit(1)
-    else:
-        print(f"Installation directory not found at {INSTALL_DIR}.")
-        print("Please re-run the install script.")
+    if not INSTALL_DIR.exists():
+        print(f"Installation directory not found at {INSTALL_DIR}.", file=sys.stderr)
+        print("Please re-run the install script.", file=sys.stderr)
         sys.exit(1)
 
+    # Pull latest code
     try:
         subprocess.run(
-            [sys.executable, "-m", "pip", "install", "--upgrade", str(INSTALL_DIR)],
+            ["git", "-C", str(INSTALL_DIR), "pull", "--ff-only"],
             check=True,
         )
-        print("Dependencies updated successfully.")
+        print("Repository updated successfully.")
     except subprocess.CalledProcessError:
-        print("Error: Failed to update dependencies.", file=sys.stderr)
+        print("Error: Failed to pull updates. Check your network connection.", file=sys.stderr)
         sys.exit(1)
+
+    # Re-install into the venv
+    venv_pip = INSTALL_DIR / ".venv" / "bin" / "pip"
+    if venv_pip.exists():
+        try:
+            subprocess.run(
+                [str(venv_pip), "install", "--upgrade", str(INSTALL_DIR)],
+                check=True,
+            )
+            print("Dependencies updated successfully.")
+        except subprocess.CalledProcessError:
+            print("Error: Failed to update dependencies.", file=sys.stderr)
+            sys.exit(1)
+    else:
+        # Fallback: try system pip with --break-system-packages
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--break-system-packages", "--upgrade", str(INSTALL_DIR)],
+                check=True,
+            )
+            print("Dependencies updated (system pip fallback).")
+        except subprocess.CalledProcessError:
+            print("Error: Failed to update dependencies.", file=sys.stderr)
+            print("Try re-running the install script: sudo bash /opt/readsb-feed-dashboard/install.sh", file=sys.stderr)
+            sys.exit(1)
 
     print("Update complete.")
     sys.exit(0)

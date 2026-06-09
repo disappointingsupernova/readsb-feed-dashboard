@@ -4,6 +4,7 @@
 set -euo pipefail
 
 INSTALL_DIR="/opt/readsb-feed-dashboard"
+VENV_DIR="${INSTALL_DIR}/.venv"
 SYMLINK="/usr/local/bin/readsb-feed-dashboard"
 CONFIG_FILE="/etc/readsb-feed-dashboard.conf"
 
@@ -25,22 +26,17 @@ echo
 read -rp "Remove installation directory ($INSTALL_DIR)? [y/N] " remove_install
 read -rp "Remove config file ($CONFIG_FILE)? [y/N] " remove_config
 
-# Uninstall Python package
-info "Removing Python package..."
-python3 -m pip uninstall -y readsb-feed-dashboard 2>/dev/null || \
-    warn "Python package not found in pip (may have been installed differently)."
-
-# Remove symlink
+# Remove symlink/wrapper
 if [[ -L "$SYMLINK" ]] || [[ -f "$SYMLINK" ]]; then
     rm -f "$SYMLINK"
-    info "Removed symlink: $SYMLINK"
+    info "Removed: $SYMLINK"
 fi
 
-# Remove install directory
+# Remove install directory (includes venv)
 if [[ "${remove_install,,}" == "y" ]]; then
     if [[ -d "$INSTALL_DIR" ]]; then
         rm -rf "$INSTALL_DIR"
-        info "Removed: $INSTALL_DIR"
+        info "Removed: $INSTALL_DIR (including virtual environment)"
     else
         warn "Directory not found: $INSTALL_DIR"
     fi
