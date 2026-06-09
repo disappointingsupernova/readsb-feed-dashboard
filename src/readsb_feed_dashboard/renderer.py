@@ -5,7 +5,6 @@ from datetime import datetime
 from rich.align import Align
 from rich.columns import Columns
 from rich.console import Console, Group
-from rich.layout import Layout
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
@@ -16,17 +15,6 @@ from .feeders import ExternalFeeders, FR24Status, PiawareStatus, RBFeederStatus
 
 # Emergency squawk codes
 _EMERGENCY_SQUAWKS = {"7500": "HIJACK", "7600": "RADIO FAIL", "7700": "EMERGENCY"}
-
-
-def _side_by_side(*panels) -> Layout:
-    """Place panels side-by-side using Layout for proper horizontal alignment."""
-    layout = Layout()
-    children = []
-    for i, panel in enumerate(panels):
-        child = Layout(panel, name=f"col{i}")
-        children.append(child)
-    layout.split_row(*children)
-    return layout
 
 
 def _theme(config: DashboardConfig) -> dict:
@@ -495,7 +483,9 @@ def render_dashboard(console: Console, config: DashboardConfig, feeds: list[Feed
     if len(top_row) == 1:
         renderables.append(top_row[0])
     else:
-        renderables.append(_side_by_side(*top_row))
+        term_width = console.width or 80
+        col_width = term_width // len(top_row)
+        renderables.append(Columns(top_row, width=col_width, expand=True, column_first=False))
 
     # Comparison mode
     if compare_mode:
@@ -522,11 +512,13 @@ def render_dashboard(console: Console, config: DashboardConfig, feeds: list[Feed
     if len(feed_panels) == 1:
         renderables.append(feed_panels[0])
     elif len(feed_panels) <= 3:
-        renderables.append(_side_by_side(*feed_panels))
+        col_width = (console.width or 80) // len(feed_panels)
+        renderables.append(Columns(feed_panels, width=col_width, expand=True, column_first=False))
     else:
         for chunk_start in range(0, len(feed_panels), 3):
             chunk = feed_panels[chunk_start:chunk_start + 3]
-            renderables.append(_side_by_side(*chunk))
+            col_width = (console.width or 80) // len(chunk)
+            renderables.append(Columns(chunk, width=col_width, expand=True, column_first=False))
 
     # Aircraft tables (unless compact mode)
     # Place side-by-side if terminal is wide enough (>= 120 cols per table)
@@ -538,12 +530,14 @@ def render_dashboard(console: Console, config: DashboardConfig, feeds: list[Feed
         aircraft_tables = [build_aircraft_table(feed, config) for feed in feeds]
 
         if tables_per_row >= len(aircraft_tables) and len(aircraft_tables) > 1:
-            renderables.append(_side_by_side(*aircraft_tables))
+            col_width = term_width // len(aircraft_tables)
+            renderables.append(Columns(aircraft_tables, width=col_width, expand=True, column_first=False))
         elif tables_per_row > 1 and len(aircraft_tables) > 1:
             for chunk_start in range(0, len(aircraft_tables), tables_per_row):
                 chunk = aircraft_tables[chunk_start:chunk_start + tables_per_row]
                 if len(chunk) > 1:
-                    renderables.append(_side_by_side(*chunk))
+                    col_width = term_width // len(chunk)
+                    renderables.append(Columns(chunk, width=col_width, expand=True, column_first=False))
                 else:
                     renderables.append(chunk[0])
         else:
