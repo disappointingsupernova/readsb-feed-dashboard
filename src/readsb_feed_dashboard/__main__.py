@@ -503,7 +503,7 @@ def _run_interactive(console: Console, config: DashboardConfig) -> None:
         external_last_check = time.time()
         external_cache_ttl = 30.0
 
-        with Live(console=console, refresh_per_second=1, screen=True) as live:
+        with Live(console=console, refresh_per_second=1, screen=False, vertical_overflow="visible") as live:
             while True:
                 feeds = [collect_feed_data(f, config) for f in config.feeds]
 
