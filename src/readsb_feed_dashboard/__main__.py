@@ -15,7 +15,7 @@ from typing import Optional
 from rich.console import Console
 
 from . import __version__
-from .collector import collect_feed_data, compute_overlaps, get_history, init_history
+from .collector import collect_feed_data, collect_system_info, compute_overlaps, get_history, init_history
 from .config import DashboardConfig
 from .feeders import ExternalFeeders, collect_external_feeders
 from .renderer import render_dashboard
@@ -411,7 +411,8 @@ def main() -> None:
     if args.once:
         feeds = [collect_feed_data(f, config) for f in config.feeds]
         external = collect_external_feeders()
-        renderable = render_dashboard(console, config, feeds, external_feeders=external)
+        sys_info = collect_system_info()
+        renderable = render_dashboard(console, config, feeds, external_feeders=external, sys_info=sys_info)
         console.print(renderable)
         sys.exit(0)
 
@@ -428,6 +429,7 @@ def _run_interactive(console: Console, config: DashboardConfig) -> None:
     from rich.live import Live
 
     focused_feed: Optional[int] = None
+    compare_mode: bool = False
     sort_options = ["seen", "distance", "altitude", "rssi"]
 
     # Set up non-blocking terminal input
@@ -444,6 +446,7 @@ def _run_interactive(console: Console, config: DashboardConfig) -> None:
 
         # Cache external feeders (refresh every 30s)
         external_feeders = collect_external_feeders()
+        sys_info = collect_system_info()
         external_last_check = time.time()
         external_cache_ttl = 30.0
 
@@ -451,12 +454,13 @@ def _run_interactive(console: Console, config: DashboardConfig) -> None:
             while True:
                 feeds = [collect_feed_data(f, config) for f in config.feeds]
 
-                # Refresh external feeders periodically
+                # Refresh external feeders and system info periodically
                 if time.time() - external_last_check > external_cache_ttl:
                     external_feeders = collect_external_feeders()
+                    sys_info = collect_system_info()
                     external_last_check = time.time()
 
-                renderable = render_dashboard(console, config, feeds, focused_feed=focused_feed, external_feeders=external_feeders)
+                renderable = render_dashboard(console, config, feeds, focused_feed=focused_feed, external_feeders=external_feeders, sys_info=sys_info, compare_mode=compare_mode)
                 live.update(renderable)
 
                 # Log if configured
@@ -481,6 +485,8 @@ def _run_interactive(console: Console, config: DashboardConfig) -> None:
                             return
                         elif key == "s":
                             config.compact_mode = not config.compact_mode
+                        elif key == "c":
+                            compare_mode = not compare_mode
                         elif key == "f":
                             # Cycle sort
                             idx = sort_options.index(config.sort_by) if config.sort_by in sort_options else 0
