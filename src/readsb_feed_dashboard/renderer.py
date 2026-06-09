@@ -228,14 +228,14 @@ def build_feed_panel(feed: FeedData, overlaps: dict, feed_index: int, all_feeds:
     )
 
 
-def build_aircraft_table(feed: FeedData, config: DashboardConfig) -> Panel:
+def build_aircraft_table(feed: FeedData, config: DashboardConfig, expand: bool = True) -> Panel:
     """Build an aircraft table for a feed."""
     theme = _theme(config)
 
     table = Table(
         show_header=True,
         header_style=theme["header"],
-        expand=False,
+        expand=expand,
         padding=(0, 1),
     )
 
@@ -377,9 +377,29 @@ def render_dashboard(console: Console, config: DashboardConfig, feeds: list[Feed
             renderables.append(Columns(chunk, equal=True, expand=True))
 
     # Aircraft tables (unless compact mode)
+    # Place side-by-side if terminal is wide enough (>= 120 cols per table)
     if not config.compact_mode:
-        for feed in feeds:
-            renderables.append(build_aircraft_table(feed, config))
+        term_width = console.width or 80
+        table_min_width = 90  # Minimum usable width per aircraft table
+        tables_per_row = max(1, term_width // table_min_width)
+
+        aircraft_tables = [build_aircraft_table(feed, config) for feed in feeds]
+
+        if tables_per_row >= len(aircraft_tables) and len(aircraft_tables) > 1:
+            # All fit side-by-side
+            renderables.append(Columns(aircraft_tables, equal=True, expand=True))
+        elif tables_per_row > 1 and len(aircraft_tables) > 1:
+            # Group in rows
+            for chunk_start in range(0, len(aircraft_tables), tables_per_row):
+                chunk = aircraft_tables[chunk_start:chunk_start + tables_per_row]
+                if len(chunk) > 1:
+                    renderables.append(Columns(chunk, equal=True, expand=True))
+                else:
+                    renderables.append(chunk[0])
+        else:
+            # Narrow terminal — stack vertically
+            for t in aircraft_tables:
+                renderables.append(t)
 
     return Group(*renderables)
 
