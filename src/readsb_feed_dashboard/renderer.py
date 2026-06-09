@@ -9,9 +9,12 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from .collector import FeedData, compute_overlaps, get_history
+from .collector import FeedData, SystemInfo, compute_overlaps, get_history
 from .config import DashboardConfig, THEMES
-from .feeders import ExternalFeeders, FR24Status
+from .feeders import ExternalFeeders, FR24Status, PiawareStatus, RBFeederStatus
+
+# Emergency squawk codes
+_EMERGENCY_SQUAWKS = {"7500": "HIJACK", "7600": "RADIO FAIL", "7700": "EMERGENCY"}
 
 
 def _theme(config: DashboardConfig) -> dict:
@@ -128,6 +131,13 @@ def build_feed_panel(feed: FeedData, overlaps: dict, feed_index: int, all_feeds:
 
     info.add_row("Aircraft:", str(feed.aircraft_count))
     info.add_row("With position:", str(feed.position_tracked))
+
+    # Count delta
+    if feed.aircraft_count_delta is not None and feed.aircraft_count_delta != 0:
+        delta_str = f"+{feed.aircraft_count_delta}" if feed.aircraft_count_delta > 0 else str(feed.aircraft_count_delta)
+        delta_style = theme["active"] if feed.aircraft_count_delta > 0 else theme["inactive"]
+        info.add_row("Delta:", Text(delta_str, style=delta_style))
+
     info.add_row("Service:", status_text)
 
     if feed.service_uptime:
@@ -213,6 +223,24 @@ def build_feed_panel(feed: FeedData, overlaps: dict, feed_index: int, all_feeds:
         spark_str = _sparkline(spark_data, width=20)
         info.add_row("Trend:", Text(spark_str, style=theme["sparkline"]))
 
+    # Gain
+    if cfg.gain:
+        info.add_row("Gain:", cfg.gain)
+
+    # Farthest aircraft
+    if feed.farthest_aircraft and feed.farthest_aircraft.distance:
+        far = feed.farthest_aircraft
+        far_str = f"{far.distance:.1f} nm"
+        if far.flight:
+            far_str += f" ({far.flight})"
+        else:
+            far_str += f" ({far.hex})"
+        info.add_row("Farthest:", far_str)
+
+    # Max range this session
+    if feed.max_range_session:
+        info.add_row("Max range:", f"{feed.max_range_session:.1f} nm")
+
     # Title
     title = f"{cfg.label}"
     if cfg.serial:
@@ -260,13 +288,20 @@ def build_aircraft_table(feed: FeedData, config: DashboardConfig, expand: bool =
         else:
             rssi_text = Text("-")
 
+        # Emergency squawk highlighting
+        squawk_str = ac.squawk or "-"
+        if ac.squawk and ac.squawk in _EMERGENCY_SQUAWKS:
+            squawk_text = Text(squawk_str, style="bold red")
+        else:
+            squawk_text = Text(squawk_str)
+
         table.add_row(
             ac.hex,
             ac.flight or "-",
             str(ac.alt_baro) if ac.alt_baro is not None else "-",
             f"{ac.gs:.0f}" if ac.gs is not None else "-",
             rssi_text,
-            ac.squawk or "-",
+            squawk_text,
             f"{ac.distance:.1f}" if ac.distance is not None else "-",
             f"{ac.seen:.1f}" if ac.seen is not None else "-",
             ac.ac_type or "-",
@@ -412,29 +447,37 @@ def build_fr24_panel(fr24: FR24Status, config: DashboardConfig) -> Panel:
     )
 
 
-def render_dashboard(console: Console, config: DashboardConfig, feeds: list[FeedData], focused_feed: int | None = None, external_feeders: ExternalFeeders | None = None) -> Group:
-    """Render the full dashboard as a Rich renderable.
-
-    Args:
-        focused_feed: If set, show only this feed's panel and table in full detail.
-    """
+def render_dashboard(console: Console, config: DashboardConfig, feeds: list[FeedData], focused_feed: int | None = None, external_feeders: ExternalFeeders | None = None, sys_info: SystemInfo | None = None, compare_mode: bool = False) -> Group:
+    """Render the full dashboard as a Rich renderable."""
     overlaps = compute_overlaps(feeds)
     renderables = []
 
     # Header
     renderables.append(build_header(config))
 
-    # Alerts, FR24, and Summary side-by-side where possible
+    # Alerts, feeders, and Summary side-by-side
     alerts_panel = build_alerts_panel(feeds, config)
     fr24_panel = None
-    if external_feeders and external_feeders.fr24 and external_feeders.fr24.available:
-        fr24_panel = build_fr24_panel(external_feeders.fr24, config)
+    piaware_panel = None
+    rbfeeder_panel = None
+
+    if external_feeders:
+        if external_feeders.fr24 and external_feeders.fr24.available:
+            fr24_panel = build_fr24_panel(external_feeders.fr24, config)
+        if external_feeders.piaware and external_feeders.piaware.available:
+            piaware_panel = build_piaware_panel(external_feeders.piaware, config)
+        if external_feeders.rbfeeder and external_feeders.rbfeeder.available:
+            rbfeeder_panel = build_rbfeeder_panel(external_feeders.rbfeeder, config)
 
     top_row = []
     if alerts_panel:
         top_row.append(alerts_panel)
     if fr24_panel:
         top_row.append(fr24_panel)
+    if piaware_panel:
+        top_row.append(piaware_panel)
+    if rbfeeder_panel:
+        top_row.append(rbfeeder_panel)
     top_row.append(build_summary_panel(feeds, overlaps, config))
 
     if len(top_row) > 1:
@@ -442,12 +485,21 @@ def render_dashboard(console: Console, config: DashboardConfig, feeds: list[Feed
     else:
         renderables.append(top_row[0])
 
+    # Comparison mode
+    if compare_mode:
+        renderables.append(build_comparison_view(feeds, config))
+        if config.show_help_bar:
+            renderables.append(build_help_bar(config))
+        return Group(*renderables)
+
     # If focused on a single feed
     if focused_feed is not None and 0 <= focused_feed < len(feeds):
         feed = feeds[focused_feed]
         renderables.append(build_feed_panel(feed, overlaps, focused_feed, feeds, config))
         if not config.compact_mode:
             renderables.append(build_aircraft_table(feed, config))
+        if config.show_help_bar:
+            renderables.append(build_help_bar(config))
         return Group(*renderables)
 
     # Feed panels side-by-side
@@ -487,6 +539,14 @@ def render_dashboard(console: Console, config: DashboardConfig, feeds: list[Feed
             for t in aircraft_tables:
                 renderables.append(t)
 
+    # System info panel
+    if sys_info:
+        renderables.append(build_system_info_panel(sys_info, config))
+
+    # Help bar
+    if config.show_help_bar:
+        renderables.append(build_help_bar(config))
+
     return Group(*renderables)
 
 
@@ -511,3 +571,120 @@ def _format_bytes_rate(bytes_per_sec: int | None) -> str:
     elif bytes_per_sec < 1024 * 1024:
         return f"{bytes_per_sec / 1024:.1f} KB/s"
     return f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
+
+
+def build_help_bar(config: DashboardConfig) -> Text:
+    """Build a dim help bar showing keyboard shortcuts."""
+    theme = _theme(config)
+    return Text(
+        "  q:quit  s:compact  f:sort  c:compare  1-9:focus  0:all",
+        style=theme["muted"],
+    )
+
+
+def build_system_info_panel(sys_info: SystemInfo, config: DashboardConfig) -> Panel:
+    """Build a system information panel."""
+    theme = _theme(config)
+
+    info = Table(show_header=False, show_edge=False, box=None, padding=(0, 1))
+    info.add_column("Key", style="bold", min_width=10)
+    info.add_column("Value")
+
+    if sys_info.hostname:
+        info.add_row("Host:", sys_info.hostname)
+    if sys_info.uptime:
+        info.add_row("Uptime:", sys_info.uptime)
+    if sys_info.cpu_temp is not None:
+        temp_style = theme["active"] if sys_info.cpu_temp < 70 else (
+            theme["stale"] if sys_info.cpu_temp < 80 else theme["inactive"]
+        )
+        info.add_row("CPU temp:", Text(f"{sys_info.cpu_temp:.1f} C", style=temp_style))
+    if sys_info.disk_free_run:
+        info.add_row("/run free:", sys_info.disk_free_run)
+    if sys_info.kernel:
+        info.add_row("Kernel:", sys_info.kernel)
+
+    return Panel(info, title="System", title_align="left", border_style=theme["panel_border"], padding=(0, 1))
+
+
+def build_piaware_panel(piaware: PiawareStatus, config: DashboardConfig) -> Panel:
+    """Build a panel for piaware feeder status."""
+    theme = _theme(config)
+
+    info = Table(show_header=False, show_edge=False, box=None, padding=(0, 1))
+    info.add_column("Key", style="bold", min_width=12)
+    info.add_column("Value")
+
+    if piaware.process_running:
+        info.add_row("Process:", Text("running", style=theme["active"]))
+    else:
+        info.add_row("Process:", Text("not running", style=theme["inactive"]))
+
+    if piaware.connected_to_flightaware:
+        info.add_row("FlightAware:", Text("connected", style=theme["active"]))
+    else:
+        info.add_row("FlightAware:", Text("disconnected", style=theme["inactive"]))
+
+    if piaware.mlat_ok:
+        info.add_row("MLAT:", Text("ok", style=theme["active"]))
+
+    if piaware.aircraft_reported is not None:
+        info.add_row("Aircraft:", str(piaware.aircraft_reported))
+
+    border_style = theme["feed_panel_ok"] if piaware.connected_to_flightaware else theme["feed_panel_bad"]
+    return Panel(info, title="PiAware", title_align="left", border_style=border_style, padding=(0, 1))
+
+
+def build_rbfeeder_panel(rbfeeder: RBFeederStatus, config: DashboardConfig) -> Panel:
+    """Build a panel for RadarBox feeder status."""
+    theme = _theme(config)
+
+    info = Table(show_header=False, show_edge=False, box=None, padding=(0, 1))
+    info.add_column("Key", style="bold", min_width=12)
+    info.add_column("Value")
+
+    if rbfeeder.process_running:
+        info.add_row("Process:", Text("running", style=theme["active"]))
+    else:
+        info.add_row("Process:", Text("not running", style=theme["inactive"]))
+
+    if rbfeeder.connected:
+        info.add_row("Link:", Text("connected", style=theme["active"]))
+
+    if rbfeeder.aircraft_tracked is not None:
+        info.add_row("Tracked:", str(rbfeeder.aircraft_tracked))
+
+    border_style = theme["feed_panel_ok"] if rbfeeder.process_running else theme["feed_panel_bad"]
+    return Panel(info, title="RadarBox", title_align="left", border_style=border_style, padding=(0, 1))
+
+
+def build_comparison_view(feeds: list[FeedData], config: DashboardConfig) -> Panel:
+    """Build a feed comparison view showing hex codes unique to each SDR."""
+    theme = _theme(config)
+
+    table = Table(show_header=True, header_style=theme["header"], expand=True, padding=(0, 1))
+
+    sdr_feeds = [f for f in feeds if f.config.feed_type != "merge"]
+    if len(sdr_feeds) < 2:
+        return Panel(Text("Need 2+ SDR feeds for comparison"), title="Feed Comparison", border_style=theme["panel_border"])
+
+    for feed in sdr_feeds:
+        table.add_column(f"Only {feed.config.label}", style="cyan")
+
+    # Compute exclusive hex sets
+    exclusive = []
+    for i, feed in enumerate(sdr_feeds):
+        others = set()
+        for j, other in enumerate(sdr_feeds):
+            if j != i:
+                others.update(other.hex_set)
+        exclusive.append(sorted(feed.hex_set - others)[:15])
+
+    max_rows = max(len(e) for e in exclusive) if exclusive else 0
+    for row_idx in range(min(max_rows, 15)):
+        row = []
+        for exc in exclusive:
+            row.append(exc[row_idx] if row_idx < len(exc) else "")
+        table.add_row(*row)
+
+    return Panel(table, title="Feed Comparison -- Exclusive Aircraft", title_align="left", border_style=theme["panel_border"])
