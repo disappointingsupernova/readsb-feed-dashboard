@@ -17,6 +17,7 @@ from rich.console import Console
 from . import __version__
 from .collector import collect_feed_data, compute_overlaps, get_history, init_history
 from .config import DashboardConfig
+from .feeders import ExternalFeeders, collect_external_feeders
 from .renderer import render_dashboard
 
 
@@ -409,7 +410,8 @@ def main() -> None:
     # Single-shot mode
     if args.once:
         feeds = [collect_feed_data(f, config) for f in config.feeds]
-        renderable = render_dashboard(console, config, feeds)
+        external = collect_external_feeders()
+        renderable = render_dashboard(console, config, feeds, external_feeders=external)
         console.print(renderable)
         sys.exit(0)
 
@@ -440,10 +442,21 @@ def _run_interactive(console: Console, config: DashboardConfig) -> None:
         if old_settings is not None:
             tty.setcbreak(stdin_fd)
 
+        # Cache external feeders (refresh every 30s)
+        external_feeders = collect_external_feeders()
+        external_last_check = time.time()
+        external_cache_ttl = 30.0
+
         with Live(console=console, refresh_per_second=1, screen=True) as live:
             while True:
                 feeds = [collect_feed_data(f, config) for f in config.feeds]
-                renderable = render_dashboard(console, config, feeds, focused_feed=focused_feed)
+
+                # Refresh external feeders periodically
+                if time.time() - external_last_check > external_cache_ttl:
+                    external_feeders = collect_external_feeders()
+                    external_last_check = time.time()
+
+                renderable = render_dashboard(console, config, feeds, focused_feed=focused_feed, external_feeders=external_feeders)
                 live.update(renderable)
 
                 # Log if configured

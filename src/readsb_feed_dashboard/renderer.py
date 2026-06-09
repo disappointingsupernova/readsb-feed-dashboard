@@ -11,6 +11,7 @@ from rich.text import Text
 
 from .collector import FeedData, compute_overlaps, get_history
 from .config import DashboardConfig, THEMES
+from .feeders import ExternalFeeders, FR24Status
 
 
 def _theme(config: DashboardConfig) -> dict:
@@ -336,7 +337,56 @@ def build_summary_panel(feeds: list[FeedData], overlaps: dict, config: Dashboard
     return Panel(table, title="Summary", title_align="left", border_style=theme["summary_border"])
 
 
-def render_dashboard(console: Console, config: DashboardConfig, feeds: list[FeedData], focused_feed: int | None = None) -> Group:
+def build_fr24_panel(fr24: FR24Status, config: DashboardConfig) -> Panel:
+    """Build a panel for FR24 feeder status."""
+    theme = _theme(config)
+
+    info = Table(show_header=False, show_edge=False, box=None, padding=(0, 1))
+    info.add_column("Key", style="bold", min_width=14)
+    info.add_column("Value")
+
+    # Process
+    if fr24.process_running:
+        info.add_row("Process:", Text("running", style=theme["active"]))
+    else:
+        info.add_row("Process:", Text("not running", style=theme["inactive"]))
+
+    # Service
+    if fr24.service_active:
+        svc_style = theme["active"] if fr24.service_active == "active" else theme["inactive"]
+        info.add_row("Service:", Text(fr24.service_active, style=svc_style))
+
+    # Link
+    if fr24.link_connected:
+        link_str = "connected"
+        if fr24.link_mode:
+            link_str += f" [{fr24.link_mode}]"
+        info.add_row("Link:", Text(link_str, style=theme["active"]))
+    else:
+        info.add_row("Link:", Text("disconnected", style=theme["inactive"]))
+
+    # Radar ID
+    if fr24.radar_id:
+        info.add_row("Radar:", fr24.radar_id)
+
+    # Aircraft stats
+    if fr24.aircraft_tracked is not None:
+        info.add_row("Tracked:", str(fr24.aircraft_tracked))
+    if fr24.aircraft_uploaded is not None:
+        info.add_row("Uploaded:", str(fr24.aircraft_uploaded))
+
+    border_style = theme["feed_panel_ok"] if fr24.link_connected else theme["feed_panel_bad"]
+
+    return Panel(
+        info,
+        title="FR24 Feeder",
+        title_align="left",
+        border_style=border_style,
+        padding=(0, 1),
+    )
+
+
+def render_dashboard(console: Console, config: DashboardConfig, feeds: list[FeedData], focused_feed: int | None = None, external_feeders: ExternalFeeders | None = None) -> Group:
     """Render the full dashboard as a Rich renderable.
 
     Args:
@@ -360,6 +410,10 @@ def render_dashboard(console: Console, config: DashboardConfig, feeds: list[Feed
         if not config.compact_mode:
             renderables.append(build_aircraft_table(feed, config))
         return Group(*renderables)
+
+    # External feeders (FR24, etc.)
+    if external_feeders and external_feeders.fr24 and external_feeders.fr24.available:
+        renderables.append(build_fr24_panel(external_feeders.fr24, config))
 
     # Summary
     renderables.append(build_summary_panel(feeds, overlaps, config))
