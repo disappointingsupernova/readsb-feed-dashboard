@@ -35,12 +35,39 @@ class ExternalFeeders:
     """Status of all detected external feeders."""
 
     fr24: Optional[FR24Status] = None
+    piaware: Optional["PiawareStatus"] = None
+    rbfeeder: Optional["RBFeederStatus"] = None
+
+
+@dataclass
+class PiawareStatus:
+    """Parsed piaware-status output."""
+
+    available: bool = False
+    process_running: bool = False
+    connected_to_flightaware: bool = False
+    mlat_ok: bool = False
+    aircraft_reported: Optional[int] = None
+    service_active: Optional[str] = None
+
+
+@dataclass
+class RBFeederStatus:
+    """Parsed rbfeeder status."""
+
+    available: bool = False
+    process_running: bool = False
+    connected: bool = False
+    aircraft_tracked: Optional[int] = None
+    service_active: Optional[str] = None
 
 
 def collect_external_feeders() -> ExternalFeeders:
     """Detect and collect status from external feeders."""
     feeders = ExternalFeeders()
     feeders.fr24 = _collect_fr24()
+    feeders.piaware = _collect_piaware()
+    feeders.rbfeeder = _collect_rbfeeder()
     return feeders
 
 
@@ -186,3 +213,70 @@ def _get_service_state(service: str) -> Optional[str]:
         return result.stdout.strip() or "unknown"
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return "unknown"
+
+
+def _collect_piaware() -> Optional[PiawareStatus]:
+    """Collect piaware status if available."""
+    if not _command_exists("piaware-status"):
+        return None
+
+    status = PiawareStatus(available=True)
+    status.service_active = _get_service_state("piaware")
+
+    try:
+        result = subprocess.run(
+            ["piaware-status"],
+            capture_output=True, text=True, timeout=10
+        )
+        output = result.stdout + result.stderr
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return status
+
+    for line in output.splitlines():
+        line_lower = line.strip().lower()
+
+        if "piaware" in line_lower and "running" in line_lower:
+            status.process_running = True
+        if "flightaware" in line_lower and "connected" in line_lower:
+            status.connected_to_flightaware = True
+        if "mlat" in line_lower and ("ok" in line_lower or "running" in line_lower):
+            status.mlat_ok = True
+        if "aircraft" in line_lower:
+            num_match = re.search(r"(\d+)", line)
+            if num_match:
+                status.aircraft_reported = int(num_match.group(1))
+
+    return status
+
+
+def _collect_rbfeeder() -> Optional[RBFeederStatus]:
+    """Collect rbfeeder status if available."""
+    if not _command_exists("rbfeeder"):
+        # Also check for the service
+        state = _get_service_state("rbfeeder")
+        if state == "unknown":
+            return None
+        status = RBFeederStatus(available=True, service_active=state)
+        status.process_running = state == "active"
+        return status
+
+    status = RBFeederStatus(available=True)
+    status.service_active = _get_service_state("rbfeeder")
+    status.process_running = status.service_active == "active"
+
+    # rbfeeder doesn't have a clean status command; check service is running
+    # and try to parse stats from its log or JSON if available
+    rb_json = Path("/run/rbfeeder/rbfeeder.json")
+    if rb_json.exists():
+        try:
+            import json
+            with open(rb_json, "r") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                status.connected = data.get("connected", False)
+                if "aircraft" in data:
+                    status.aircraft_tracked = int(data["aircraft"])
+        except (Exception,):
+            pass
+
+    return status
