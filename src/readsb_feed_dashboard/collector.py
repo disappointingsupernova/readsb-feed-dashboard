@@ -654,15 +654,20 @@ def _check_process_stats(data: FeedData) -> None:
                         break
 
         # CPU from /proc/PID/stat — rough percentage
+        # Verify process name to guard against PID recycling (TOCTOU)
         stat_path = Path(f"/proc/{pid}/stat")
         if stat_path.exists():
             with open(stat_path, "r") as f:
-                fields = f.read().split()
+                stat_content = f.read()
+            fields = stat_content.split()
             if len(fields) > 14:
+                # fields[1] is (comm) — verify it's readsb
+                comm = fields[1].strip("()")
+                if comm != "readsb":
+                    return
                 utime = int(fields[13])
                 stime = int(fields[14])
                 total_ticks = utime + stime
-                # Get system Hz
                 hz = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
                 with open("/proc/uptime", "r") as f:
                     uptime = float(f.read().split()[0])
