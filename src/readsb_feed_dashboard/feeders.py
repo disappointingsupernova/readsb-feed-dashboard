@@ -66,7 +66,8 @@ def _collect_fr24() -> Optional[FR24Status]:
 
     # Parse output line by line
     for line in output.splitlines():
-        line_stripped = line.strip()
+        # Strip leading whitespace and bullet points (* )
+        line_stripped = line.strip().lstrip("* ").strip()
         line_lower = line_stripped.lower()
 
         # FR24 Feeder/Decoder Process: running
@@ -103,12 +104,14 @@ def _collect_fr24() -> Optional[FR24Status]:
                 val = parts[1].strip()
                 status.has_sharing_key = bool(val) and val != "---" and "not" not in val.lower()
 
-        # Receiver: connected (17 aircraft)
+        # Receiver: connected (340538 MSGS/0 SYNC)  or  connected (17 aircraft)
         elif line_lower.startswith("receiver"):
             status.receiver_connected = "connected" in line_lower
-            num_match = re.search(r"\((\d+)\s+aircraft\)", line_stripped, re.IGNORECASE)
+            # Try to extract aircraft count or message count
+            num_match = re.search(r"\((\d+)\s+(aircraft|msgs)", line_stripped, re.IGNORECASE)
             if num_match:
-                status.receiver_aircraft = int(num_match.group(1))
+                if num_match.group(2).lower() == "aircraft":
+                    status.receiver_aircraft = int(num_match.group(1))
 
         # FR24 MLAT: ok
         elif "mlat" in line_lower and "ac" not in line_lower:
@@ -120,8 +123,8 @@ def _collect_fr24() -> Optional[FR24Status]:
             if num_match:
                 status.mlat_aircraft_seen = int(num_match.group(1))
 
-        # Aircraft Tracked: 17 / Aircraft Uploaded: 15
-        elif "aircraft" in line_lower and "tracked" in line_lower:
+        # FR24 Tracked AC: 18  or  Aircraft Tracked: 17
+        elif ("tracked" in line_lower and ("ac" in line_lower or "aircraft" in line_lower)):
             num_match = re.search(r"(\d+)", line_stripped)
             if num_match:
                 status.aircraft_tracked = int(num_match.group(1))
