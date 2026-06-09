@@ -323,25 +323,40 @@ def _read_local_json(data: FeedData, stale_threshold: float) -> Optional[dict]:
 
 
 def _get_receiver_position(data: FeedData) -> tuple[Optional[float], Optional[float]]:
-    """Try to get receiver lat/lon from config, then receiver.json."""
+    """Try to get receiver lat/lon from config, then receiver.json, then sibling dirs."""
     # Check config first
     if data.config.receiver_lat is not None and data.config.receiver_lon is not None:
         return data.config.receiver_lat, data.config.receiver_lon
 
-    # Fall back to receiver.json adjacent to aircraft.json
+    # Try receiver.json adjacent to this feed's aircraft.json
     if data.config.json_path:
-        receiver_path = Path(data.config.json_path).parent / "receiver.json"
-        if receiver_path.exists():
-            try:
-                with open(receiver_path, "r") as f:
-                    rdata = json.load(f)
-                lat = rdata.get("lat") if isinstance(rdata.get("lat"), (int, float)) else None
-                lon = rdata.get("lon") if isinstance(rdata.get("lon"), (int, float)) else None
-                if lat is not None and lon is not None:
-                    return lat, lon
-            except (json.JSONDecodeError, PermissionError, OSError):
-                pass
+        result = _read_receiver_json(Path(data.config.json_path).parent / "receiver.json")
+        if result:
+            return result
+
+    # Fall back to any sibling /run/readsb* directory that has receiver.json
+    for candidate in ["/run/readsb", "/run/readsb-merge", "/run/readsb-sdr1", "/run/readsb-sdr2"]:
+        result = _read_receiver_json(Path(candidate) / "receiver.json")
+        if result:
+            return result
+
     return None, None
+
+
+def _read_receiver_json(path: Path) -> Optional[tuple[float, float]]:
+    """Read lat/lon from a receiver.json file."""
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r") as f:
+            rdata = json.load(f)
+        lat = rdata.get("lat") if isinstance(rdata.get("lat"), (int, float)) else None
+        lon = rdata.get("lon") if isinstance(rdata.get("lon"), (int, float)) else None
+        if lat is not None and lon is not None:
+            return lat, lon
+    except (json.JSONDecodeError, PermissionError, OSError):
+        pass
+    return None
 
 
 def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

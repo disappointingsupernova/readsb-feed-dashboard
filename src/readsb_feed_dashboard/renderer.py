@@ -235,19 +235,19 @@ def build_aircraft_table(feed: FeedData, config: DashboardConfig) -> Panel:
     table = Table(
         show_header=True,
         header_style=theme["header"],
-        expand=True,
+        expand=False,
         padding=(0, 1),
     )
 
-    table.add_column("Hex", style="cyan", min_width=7)
-    table.add_column("Flight", min_width=8)
-    table.add_column("Alt (ft)", justify="right", min_width=8)
-    table.add_column("Spd (kt)", justify="right", min_width=8)
-    table.add_column("RSSI", justify="right", min_width=6)
-    table.add_column("Squawk", min_width=6)
-    table.add_column("Dist (nm)", justify="right", min_width=8)
-    table.add_column("Seen (s)", justify="right", min_width=7)
-    table.add_column("Type", min_width=6)
+    table.add_column("Hex", style="cyan", width=7, no_wrap=True)
+    table.add_column("Flight", width=8, no_wrap=True)
+    table.add_column("Alt", justify="right", width=6, no_wrap=True)
+    table.add_column("Spd", justify="right", width=4, no_wrap=True)
+    table.add_column("RSSI", justify="right", width=6, no_wrap=True)
+    table.add_column("Sqk", width=5, no_wrap=True)
+    table.add_column("Dist", justify="right", width=5, no_wrap=True)
+    table.add_column("Seen", justify="right", width=5, no_wrap=True)
+    table.add_column("Type", width=10, no_wrap=True)
 
     # Sort aircraft by configured sort key
     sorted_aircraft = _sort_aircraft(feed.aircraft, config.sort_by)
