@@ -25,12 +25,30 @@ readsb-feed-dashboard --help
 - Supports 1, 2, or more SDR feeds plus merged feeds
 - Auto-detects readsb instances, JSON paths, systemd services, ports, and receiver serials
 - Shows aircraft counts, unique-per-feed counts, and shared counts
-- Displays latest aircraft with hex, callsign, altitude, speed, RSSI, squawk, distance, and seen time
+- Position-tracked vs Mode-S-only aircraft breakdown
+- Live message rate (msgs/sec) per feed
+- Service uptime display
+- Signal strength statistics (min/avg/max RSSI) with colour coding
+- Aircraft type breakdown (ADS-B, MLAT, TIS-B, Mode-S)
+- Distance ring distribution (50/100/150/200+ nm)
+- Feed health sparkline graphs
+- CPU, memory, and network I/O per service
+- Threshold-based alerts (aircraft count, service down, stale JSON)
+- Remote feed monitoring over HTTP
+- Displays latest aircraft with hex, callsign, altitude, speed, RSSI, squawk, distance, type, and seen time
 - Reports service status (active/inactive/failed)
 - Detects stale or missing JSON files
 - ASCII-safe mode for terminals without Unicode support
 - Configurable via JSON config file or fully automatic
 - Custom feed labels
+- Keyboard navigation (focus feeds, toggle views, cycle sort)
+- Configurable sort (seen, distance, altitude, RSSI)
+- Compact/summary-only mode
+- Three colour themes (dark, light, solarised)
+- CSV logging for historical data
+- JSON export for external tooling
+- Watchdog mode for scripts and cron
+- tmux/screen auto-detection with throttling
 
 ## Requirements
 
@@ -49,6 +67,9 @@ The dashboard works without any configuration by auto-detecting your setup. For 
 - [Configuration](docs/configuration.md)
 - [Usage](docs/usage.md)
 - [Architecture](docs/architecture.md)
+- [Data Flow](docs/data-flow.md)
+- [Deployment](docs/deployment.md)
+- [Security](docs/security.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Extending](docs/extending.md)
 

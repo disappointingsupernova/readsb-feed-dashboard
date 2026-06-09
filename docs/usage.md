@@ -21,7 +21,25 @@ readsb-feed-dashboard --refresh 5
 # Show more aircraft rows
 readsb-feed-dashboard --max-rows 20
 
-# Render once and exit (useful for screenshots or piping)
+# Compact mode — summary and panels only, no aircraft tables
+readsb-feed-dashboard --compact
+
+# Sort aircraft by distance instead of seen time
+readsb-feed-dashboard --sort distance
+
+# Use the solarised colour theme
+readsb-feed-dashboard --theme solarised
+
+# Log to CSV each cycle
+readsb-feed-dashboard --log /var/log/readsb-dashboard.csv
+
+# Export current state as JSON (single shot)
+readsb-feed-dashboard --export json
+
+# Watchdog mode — exit non-zero if any feed is unhealthy
+readsb-feed-dashboard --watchdog
+
+# Render once and exit (useful for screenshots)
 readsb-feed-dashboard --once
 
 # Dump auto-detected configuration
@@ -39,6 +57,9 @@ readsb-feed-dashboard --version
 ```
 usage: readsb-feed-dashboard [-h] [--version] [--config CONFIG] [--refresh REFRESH]
                              [--ascii] [--unicode] [--max-rows MAX_ROWS]
+                             [--sort {seen,distance,altitude,rssi}]
+                             [--compact] [--theme {dark,light,solarised}]
+                             [--log LOG] [--export {json}] [--watchdog]
                              [--update] [--dump-config] [--once]
 
 Terminal dashboard for monitoring multi-readsb ADS-B setups.
@@ -51,6 +72,14 @@ options:
   --ascii               Force ASCII-safe mode
   --unicode             Force Unicode mode
   --max-rows MAX_ROWS   Maximum aircraft rows per feed table (default: 10)
+  --sort {seen,distance,altitude,rssi}
+                        Sort aircraft table by field (default: seen)
+  --compact             Compact mode — hide aircraft tables
+  --theme {dark,light,solarised}
+                        Colour theme (default: dark)
+  --log LOG             Log feed data to CSV file each cycle
+  --export {json}       Export current state as JSON and exit
+  --watchdog            Exit non-zero if any feed is down
   --update              Update to the latest version
   --dump-config         Dump configuration as JSON and exit
   --once                Render once and exit
@@ -58,57 +87,101 @@ options:
 
 ## Keyboard Controls
 
+While the dashboard is running interactively:
+
 | Key | Action |
 |---|---|
-| `Ctrl+C` | Exit cleanly |
+| `q` | Quit |
+| `s` | Toggle compact/summary-only mode |
+| `f` | Cycle sort order (seen -> distance -> altitude -> rssi) |
+| `1` | Focus on feed 1 (full detail) |
+| `2` | Focus on feed 2 (full detail) |
+| `3` | Focus on feed 3 (full detail) |
+| `0` | Return to all-feeds view |
 
-## Example Output
+## Modes
 
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                      readsb Multi-Feed Dashboard                             │
-│                        2025-01-15 14:32:07                                   │
-└──────────────────────────────────────────────────────────────────────────────┘
-┌─ Summary ────────────────────────────────────────────────────────────────────┐
-│  Feed     Aircraft  Unique  Service  JSON                                    │
-│  SDR1     47        3       active   LIVE                                    │
-│  SDR2     52        8       active   LIVE                                    │
-│  MERGED   55        0       active   LIVE                                    │
-│                                                                              │
-│  TOTAL UNIQUE  55                                                            │
-└──────────────────────────────────────────────────────────────────────────────┘
-┌─ SDR1 [64466840] ────┐  ┌─ SDR2 [95440338] ────┐  ┌─ MERGED ───────────────┐
-│  Aircraft:    47      │  │  Aircraft:    52      │  │  Aircraft:    55       │
-│  Service:     active  │  │  Service:     active  │  │  Service:     active   │
-│  JSON:        LIVE    │  │  JSON:        LIVE    │  │  JSON:        LIVE     │
-│  Unique:      3       │  │  Unique:      8       │  │  Unique:      0        │
-│  Shared w/SDR2: 44    │  │  Shared w/SDR1: 44    │  │  Beast port:  30005    │
-│  Beast port:  30105   │  │  Beast port:  30205   │  │  SBS port:    30003    │
-│  Serial:      64466840│  │  Serial:      95440338│  │                        │
-└───────────────────────┘  └───────────────────────┘  └────────────────────────┘
-┌─ Latest Aircraft — SDR1 ─────────────────────────────────────────────────────┐
-│  Hex      Flight   Alt (ft)  Spd (kt)  RSSI   Squawk  Dist (nm)  Seen (s)   │
-│  4ca87d   RYR3456  37000     482       -3.2   2431    42.1       0          │
-│  400a12   BAW92    34000     448       -5.1   4321    38.7       1          │
-│  ...                                                                         │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
+### Default Mode
 
-## Running on Boot (Optional)
+Shows all feeds side-by-side with summary panel and aircraft tables.
 
-To start the dashboard automatically in a tmux session:
+### Compact Mode (`--compact` or press `s`)
+
+Hides the per-feed aircraft tables, showing only the summary and feed info panels. Useful for small terminals or quick status checks.
+
+### Focused Mode (press `1`, `2`, `3`, etc.)
+
+Shows a single feed in full detail. Press `0` to return to the multi-feed view.
+
+### Watchdog Mode (`--watchdog`)
+
+Non-interactive. Checks all feeds once and exits:
+- Exit code 0: all feeds healthy
+- Exit code 1: one or more feeds down/stale
+
+Useful in cron jobs or monitoring scripts:
 
 ```bash
-# Add to /etc/rc.local or create a systemd service:
-tmux new-session -d -s dashboard 'readsb-feed-dashboard'
+readsb-feed-dashboard --watchdog || echo "ALERT: Feed failure detected" | mail -s "readsb alert" admin@example.com
+```
+
+### Export Mode (`--export json`)
+
+Outputs a single JSON snapshot of all feed data. Useful for integration with external monitoring tools:
+
+```bash
+readsb-feed-dashboard --export json | jq '.feeds[].aircraft_count'
+```
+
+## Logging
+
+Enable CSV logging with `--log` or the `log_path` config field:
+
+```bash
+readsb-feed-dashboard --log /var/log/readsb-dashboard.csv
+```
+
+The CSV format:
+
+```csv
+timestamp,feed,aircraft,position_tracked,messages_rate,service_active,json_stale
+2025-01-15T14:32:07,SDR1,47,42,312.5,active,False
+2025-01-15T14:32:07,SDR2,52,48,287.3,active,False
+2025-01-15T14:32:07,MERGED,55,50,599.8,active,False
+```
+
+## Themes
+
+Three built-in colour themes:
+
+- `dark` — cyan/green/red on dark backgrounds (default)
+- `light` — darker tones for light terminal backgrounds
+- `solarised` — Solarised colour palette
+
+Set via `--theme` or in config:
+
+```json
+{
+  "theme": "solarised"
+}
 ```
 
 ## SSH Usage
 
-Works perfectly over SSH:
+Works over SSH — allocate a pseudo-terminal:
 
 ```bash
 ssh user@adsb-pi -t readsb-feed-dashboard
 ```
 
-The `-t` flag allocates a pseudo-terminal, required for the TUI to render correctly.
+## Running on Boot (Optional)
+
+Start the dashboard in a tmux session:
+
+```bash
+tmux new-session -d -s dashboard 'readsb-feed-dashboard'
+```
+
+## tmux/screen Detection
+
+When running inside tmux or screen, the dashboard automatically increases the minimum refresh interval to 3 seconds to reduce bandwidth over slow connections.
