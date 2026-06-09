@@ -157,6 +157,14 @@ class DashboardConfig:
     @classmethod
     def _from_file(cls, path: Path) -> "DashboardConfig":
         """Parse a JSON config file."""
+        # Reject excessively large config files (defence in depth)
+        try:
+            file_size = path.stat().st_size
+            if file_size > 1_048_576:  # 1 MB
+                raise ValueError(f"Config file too large ({file_size} bytes, max 1MB)")
+        except OSError as e:
+            raise FileNotFoundError(f"Cannot stat config: {e}")
+
         with open(path, "r") as f:
             data = json.load(f)
 
