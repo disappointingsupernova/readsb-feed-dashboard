@@ -433,12 +433,13 @@ def _run_interactive(console: Console, config: DashboardConfig) -> None:
     old_settings = None
     try:
         old_settings = termios.tcgetattr(stdin_fd)
-        tty.setcbreak(stdin_fd)
     except (termios.error, OSError):
-        # Not a real terminal (piped input, etc.)
-        old_settings = None
+        pass
 
     try:
+        if old_settings is not None:
+            tty.setcbreak(stdin_fd)
+
         with Live(console=console, refresh_per_second=1, screen=True) as live:
             while True:
                 feeds = [collect_feed_data(f, config) for f in config.feeds]
