@@ -424,18 +424,23 @@ def render_dashboard(console: Console, config: DashboardConfig, feeds: list[Feed
     # Header
     renderables.append(build_header(config))
 
-    # Alerts and external feeders side-by-side
+    # Alerts, FR24, and Summary side-by-side where possible
     alerts_panel = build_alerts_panel(feeds, config)
     fr24_panel = None
     if external_feeders and external_feeders.fr24 and external_feeders.fr24.available:
         fr24_panel = build_fr24_panel(external_feeders.fr24, config)
 
-    if alerts_panel and fr24_panel:
-        renderables.append(Columns([alerts_panel, fr24_panel], equal=True, expand=True))
-    elif alerts_panel:
-        renderables.append(alerts_panel)
-    elif fr24_panel:
-        renderables.append(fr24_panel)
+    top_row = []
+    if alerts_panel:
+        top_row.append(alerts_panel)
+    if fr24_panel:
+        top_row.append(fr24_panel)
+    top_row.append(build_summary_panel(feeds, overlaps, config))
+
+    if len(top_row) > 1:
+        renderables.append(Columns(top_row, equal=True, expand=True))
+    else:
+        renderables.append(top_row[0])
 
     # If focused on a single feed
     if focused_feed is not None and 0 <= focused_feed < len(feeds):
@@ -444,9 +449,6 @@ def render_dashboard(console: Console, config: DashboardConfig, feeds: list[Feed
         if not config.compact_mode:
             renderables.append(build_aircraft_table(feed, config))
         return Group(*renderables)
-
-    # Summary
-    renderables.append(build_summary_panel(feeds, overlaps, config))
 
     # Feed panels side-by-side
     feed_panels = []
