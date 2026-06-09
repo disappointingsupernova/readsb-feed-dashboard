@@ -1,6 +1,8 @@
 """Data collection module — reads JSON, queries systemd, detects ports, computes metrics."""
 
 import json
+import math
+import os
 import subprocess
 import time
 import urllib.request
@@ -246,12 +248,25 @@ def _read_json(data: FeedData, stale_threshold: float) -> None:
         data.json_error = "Invalid 'aircraft' field"
         return
 
+    # Try to get receiver position for distance calculation
+    receiver_lat, receiver_lon = _get_receiver_position(data)
+
     for ac in aircraft_list:
         if not isinstance(ac, dict):
             continue
         hex_code = ac.get("hex", "").strip()
         if not hex_code:
             continue
+
+        ac_lat = ac.get("lat") if isinstance(ac.get("lat"), (int, float)) else None
+        ac_lon = ac.get("lon") if isinstance(ac.get("lon"), (int, float)) else None
+
+        # Distance: use r_dst if available, otherwise compute from lat/lon
+        distance = None
+        if isinstance(ac.get("r_dst"), (int, float)):
+            distance = ac.get("r_dst")
+        elif ac_lat is not None and ac_lon is not None and receiver_lat is not None and receiver_lon is not None:
+            distance = _haversine_nm(receiver_lat, receiver_lon, ac_lat, ac_lon)
 
         entry = AircraftEntry(
             hex=hex_code,
@@ -261,9 +276,9 @@ def _read_json(data: FeedData, stale_threshold: float) -> None:
             rssi=ac.get("rssi") if isinstance(ac.get("rssi"), (int, float)) else None,
             squawk=ac.get("squawk") if isinstance(ac.get("squawk"), str) else None,
             seen=ac.get("seen") if isinstance(ac.get("seen"), (int, float)) else None,
-            distance=ac.get("r_dst") if isinstance(ac.get("r_dst"), (int, float)) else None,
-            lat=ac.get("lat") if isinstance(ac.get("lat"), (int, float)) else None,
-            lon=ac.get("lon") if isinstance(ac.get("lon"), (int, float)) else None,
+            distance=distance,
+            lat=ac_lat,
+            lon=ac_lon,
             ac_type=ac.get("type") if isinstance(ac.get("type"), str) else None,
         )
         data.aircraft.append(entry)
@@ -305,6 +320,40 @@ def _read_local_json(data: FeedData, stale_threshold: float) -> Optional[dict]:
     except (PermissionError, OSError) as e:
         data.json_error = f"Read error: {e}"
         return None
+
+
+def _get_receiver_position(data: FeedData) -> tuple[Optional[float], Optional[float]]:
+    """Try to get receiver lat/lon from config, then receiver.json."""
+    # Check config first
+    if data.config.receiver_lat is not None and data.config.receiver_lon is not None:
+        return data.config.receiver_lat, data.config.receiver_lon
+
+    # Fall back to receiver.json adjacent to aircraft.json
+    if data.config.json_path:
+        receiver_path = Path(data.config.json_path).parent / "receiver.json"
+        if receiver_path.exists():
+            try:
+                with open(receiver_path, "r") as f:
+                    rdata = json.load(f)
+                lat = rdata.get("lat") if isinstance(rdata.get("lat"), (int, float)) else None
+                lon = rdata.get("lon") if isinstance(rdata.get("lon"), (int, float)) else None
+                if lat is not None and lon is not None:
+                    return lat, lon
+            except (json.JSONDecodeError, PermissionError, OSError):
+                pass
+    return None, None
+
+
+def _haversine_nm(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Compute great-circle distance in nautical miles between two points."""
+    R_NM = 3440.065  # Earth radius in nautical miles
+    lat1_r = math.radians(lat1)
+    lat2_r = math.radians(lat2)
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1_r) * math.cos(lat2_r) * math.sin(dlon / 2) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R_NM * c
 
 
 def _fetch_remote_json(data: FeedData) -> Optional[dict]:
@@ -642,5 +691,3 @@ def compute_overlaps(feeds: list[FeedData]) -> dict:
     return result
 
 
-# Need os for sysconf
-import os

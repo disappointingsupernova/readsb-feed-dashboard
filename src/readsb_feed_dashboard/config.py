@@ -115,6 +115,8 @@ class FeedConfig:
     beast_port: Optional[int] = None
     sbs_port: Optional[int] = None
     serial: Optional[str] = None
+    receiver_lat: Optional[float] = None
+    receiver_lon: Optional[float] = None
     alerts: Optional[AlertConfig] = None
 
 
@@ -178,6 +180,8 @@ class DashboardConfig:
                 beast_port=fd.get("beast_port"),
                 sbs_port=fd.get("sbs_port"),
                 serial=fd.get("serial"),
+                receiver_lat=fd.get("receiver_lat"),
+                receiver_lon=fd.get("receiver_lon"),
                 alerts=alerts,
             ))
 

@@ -267,7 +267,7 @@ def build_aircraft_table(feed: FeedData, config: DashboardConfig) -> Panel:
             rssi_text,
             ac.squawk or "-",
             f"{ac.distance:.1f}" if ac.distance is not None else "-",
-            f"{ac.seen:.0f}" if ac.seen is not None else "-",
+            f"{ac.seen:.1f}" if ac.seen is not None else "-",
             ac.ac_type or "-",
         )
 
