@@ -391,9 +391,9 @@ def main() -> None:
     init_history(config.sparkline_length)
 
     # Set up console
-    if not config.unicode_mode:
-        os.environ["TERM"] = "dumb"
     console = Console(force_terminal=True)
+    if not config.unicode_mode:
+        console = Console(force_terminal=True, no_color=False, highlight=False)
 
     # Handle signals gracefully
     def signal_handler(sig, frame):
