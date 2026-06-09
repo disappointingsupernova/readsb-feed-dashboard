@@ -1,0 +1,27 @@
+[Unit]
+Description=readsb-feed-dashboard metrics and web daemon
+Documentation=https://github.com/Louis/readsb-feed-dashboard
+After=network.target readsb.service
+Wants=readsb.service
+
+[Service]
+Type=simple
+ExecStart=/opt/readsb-feed-dashboard/.venv/bin/python -m readsb_feed_dashboard --daemon
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=readsb-feed-dashboard
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/
+ReadWritePaths=/var/log
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target

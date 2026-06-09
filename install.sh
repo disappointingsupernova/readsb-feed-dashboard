@@ -115,6 +115,14 @@ exec "${VENV_DIR}/bin/python" -m readsb_feed_dashboard "\$@"
 EOF
     chmod +x "$SYMLINK"
 
+    # Install systemd service file (but do not enable)
+    if [[ -f "$INSTALL_DIR/service/readsb-feed-dashboard.service" ]]; then
+        cp "$INSTALL_DIR/service/readsb-feed-dashboard.service" /etc/systemd/system/
+        systemctl daemon-reload
+        info "Systemd service installed (not enabled). To enable:"
+        info "  sudo systemctl enable --now readsb-feed-dashboard"
+    fi
+
     # Install example config if none exists
     if [[ ! -f "$CONFIG_FILE" ]]; then
         if [[ -f "$INSTALL_DIR/config/readsb-feed-dashboard.conf.example" ]]; then

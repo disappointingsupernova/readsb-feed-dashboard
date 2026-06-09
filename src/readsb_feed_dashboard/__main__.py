@@ -144,6 +144,12 @@ def parse_args() -> argparse.Namespace:
         default=1.0,
         help="Replay speed multiplier (default: 1.0).",
     )
+    parser.add_argument(
+        "--daemon",
+        action="store_true",
+        default=False,
+        help="Run in daemon mode (headless — web/metrics only, no TUI).",
+    )
 
     return parser.parse_args()
 
@@ -421,11 +427,12 @@ def main() -> None:
     from .aircraftdb import load_database
     load_database()
 
-    # Start web server if requested
-    if args.web:
+    # Start web server if requested via CLI or config
+    web_port = args.web or (config.web_port if config.web_enabled else None)
+    if web_port:
         from .web import start_web_server
-        start_web_server(port=args.web)
-        print(f"Web server started on port {args.web}", file=sys.stderr)
+        start_web_server(port=web_port)
+        print(f"Web server started on port {web_port}", file=sys.stderr)
 
     # Set up console
     console = Console(force_terminal=True)
@@ -455,6 +462,11 @@ def main() -> None:
     # Replay mode
     if args.replay:
         _run_replay(console, config, args.replay, args.replay_speed)
+        sys.exit(0)
+
+    # Daemon mode (headless — web/metrics only)
+    if args.daemon:
+        _run_daemon(config)
         sys.exit(0)
 
     # Interactive mode with keyboard input
@@ -515,12 +527,15 @@ def _run_interactive(console: Console, config: DashboardConfig) -> None:
                 # Send notifications for any alerts
                 all_alerts = [a for f in feeds for a in f.alerts]
                 if all_alerts:
-                    try:
-                        from .notifications import send_notifications, NotificationConfig
-                        # TODO: load notification config from config file
-                        send_notifications(all_alerts, None)
-                    except ImportError:
-                        pass
+                    from .notifications import send_notifications, NotificationConfig
+                    notif_config = None
+                    if config.notification_webhook_url or config.notification_script:
+                        notif_config = NotificationConfig(
+                            webhook_url=config.notification_webhook_url,
+                            script_path=config.notification_script,
+                            cooldown_seconds=config.notification_cooldown,
+                        )
+                    send_notifications(all_alerts, notif_config)
 
                 # Notify plugin collectors
                 try:
@@ -570,6 +585,42 @@ def _run_interactive(console: Console, config: DashboardConfig) -> None:
     finally:
         if old_settings is not None:
             termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
+
+
+def _run_daemon(config: DashboardConfig) -> None:
+    """Run in daemon mode — headless, web/metrics only, no TUI."""
+    from .notifications import send_notifications, NotificationConfig
+    from .web import update_web_state
+
+    if not config.web_enabled and not config.notification_webhook_url:
+        print("Daemon mode requires web_enabled or notification_webhook_url in config.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Running in daemon mode (refresh every {config.refresh_interval}s)...", file=sys.stderr)
+
+    notif_config = None
+    if config.notification_webhook_url or config.notification_script:
+        notif_config = NotificationConfig(
+            webhook_url=config.notification_webhook_url,
+            script_path=config.notification_script,
+            cooldown_seconds=config.notification_cooldown,
+        )
+
+    while True:
+        feeds = [collect_feed_data(f, config) for f in config.feeds]
+        overlaps = compute_overlaps(feeds)
+        update_web_state(feeds, overlaps)
+
+        # Notifications
+        all_alerts = [a for f in feeds for a in f.alerts]
+        if all_alerts and notif_config:
+            send_notifications(all_alerts, notif_config)
+
+        # Logging
+        if config.log_path:
+            log_cycle(feeds, config.log_path)
+
+        time.sleep(config.refresh_interval)
 
 
 def _run_replay(console: Console, config: DashboardConfig, csv_path: str, speed: float) -> None:

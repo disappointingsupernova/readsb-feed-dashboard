@@ -480,10 +480,15 @@ def render_dashboard(console: Console, config: DashboardConfig, feeds: list[Feed
         top_row.append(rbfeeder_panel)
     top_row.append(build_summary_panel(feeds, overlaps, config))
 
-    if len(top_row) > 1:
+    # Match column count to feed panels below for visual alignment
+    num_feeds = min(len(feeds), 3)
+    if len(top_row) == 1:
+        renderables.append(top_row[0])
+    elif len(top_row) <= num_feeds:
+        # Pad with empty to match feed panel column count
         renderables.append(Columns(top_row, equal=True, expand=True))
     else:
-        renderables.append(top_row[0])
+        renderables.append(Columns(top_row, equal=True, expand=True))
 
     # Comparison mode
     if compare_mode:

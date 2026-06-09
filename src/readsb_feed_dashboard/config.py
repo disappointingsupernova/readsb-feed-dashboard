@@ -140,6 +140,12 @@ class DashboardConfig:
     log_path: Optional[str] = None
     distance_rings: list[int] = field(default_factory=lambda: [50, 100, 150, 200])
     show_help_bar: bool = True
+    web_enabled: bool = False
+    web_port: int = 8754
+    web_bind: str = "0.0.0.0"
+    notification_webhook_url: Optional[str] = None
+    notification_script: Optional[str] = None
+    notification_cooldown: float = 300.0
 
     @classmethod
     def load(cls, config_path: Optional[str] = None) -> "DashboardConfig":
@@ -213,6 +219,12 @@ class DashboardConfig:
             log_path=data.get("log_path"),
             distance_rings=data.get("distance_rings", [50, 100, 150, 200]),
             show_help_bar=data.get("show_help_bar", True),
+            web_enabled=data.get("web_enabled", False),
+            web_port=data.get("web_port", 8754),
+            web_bind=data.get("web_bind", "0.0.0.0"),
+            notification_webhook_url=data.get("notification_webhook_url"),
+            notification_script=data.get("notification_script"),
+            notification_cooldown=data.get("notification_cooldown", 300.0),
         )
 
     @classmethod
